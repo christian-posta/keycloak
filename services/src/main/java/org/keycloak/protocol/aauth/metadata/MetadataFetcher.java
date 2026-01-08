@@ -97,8 +97,13 @@ public class MetadataFetcher {
     public ResourceMetadata fetchResourceMetadata(String resourceId) {
         try {
             URI resourceUri = new URI(resourceId);
-            if (!"https".equals(resourceUri.getScheme())) {
-                logger.warnf("Resource identifier must use HTTPS: %s", resourceId);
+            String scheme = resourceUri.getScheme();
+            String host = resourceUri.getHost();
+            
+            // Allow HTTP for localhost/127.0.0.1 for testing purposes
+            boolean isLocalhost = host != null && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("[::1]"));
+            if (!"https".equals(scheme) && !(isLocalhost && "http".equals(scheme))) {
+                logger.warnf("Resource identifier must use HTTPS (or HTTP for localhost): %s", resourceId);
                 return null;
             }
 
@@ -141,8 +146,13 @@ public class MetadataFetcher {
     public JSONWebKeySet fetchJWKS(String jwksUri) {
         try {
             URI uri = new URI(jwksUri);
-            if (!"https".equals(uri.getScheme())) {
-                logger.warnf("JWKS URI must use HTTPS: %s", jwksUri);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            
+            // Allow HTTP for localhost/127.0.0.1 for testing purposes
+            boolean isLocalhost = host != null && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("[::1]"));
+            if (!"https".equals(scheme) && !(isLocalhost && "http".equals(scheme))) {
+                logger.warnf("JWKS URI must use HTTPS (or HTTP for localhost): %s", jwksUri);
                 return null;
             }
 

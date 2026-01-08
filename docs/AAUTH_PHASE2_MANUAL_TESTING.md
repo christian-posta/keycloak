@@ -20,7 +20,7 @@ This document provides step-by-step instructions for manually testing the AAuth 
 # Build Keycloak (first time: ~10-30 minutes)
 cd /path/to/keycloak
 
-# Recommended: Build only server (skips test suite compilation issues)
+# Build this first
 ./mvnw -pl services clean install -DskipTests
 
 # Rebuild services + server (without clean to keep jar)
@@ -28,6 +28,10 @@ cd /path/to/keycloak
 
 # Full rebuild (takes longer)
 ./mvnw -pl core,services,quarkus/server,quarkus/deployment,quarkus/dist -am clean install -DskipTests -DskipProtoLock=true
+
+# May need to do this (keep in back pocket):
+# The Infinispan marshaller classes are generated during the model/infinispan build. Rebuilding only services doesn't regenerate them, so the server JAR has stale marshallers that reference classes that don't exist or have changed.
+./mvnw -pl model/infinispan clean install -DskipTests -Dmaven.test.skip=true
 
 # Alternative: Full build (if you want everything)
 # ./mvnw clean install -DskipTests -DskipProtoLock=true
@@ -403,8 +407,116 @@ curl -X POST \
 **Prerequisites**:
 - Ed25519 key pair for agent
 - A resource token (signed by the resource)
+- Mock resource server running (for Keycloak to fetch resource metadata and JWKS)
 
-**Note**: For manual testing, you'll need to create a mock resource token. In production, this would be issued by the resource server.
+**Note**: For manual testing, we'll use a mock resource server. In production, this would be a real resource server.
+
+#### Step 1: Start the Mock Resource Server
+
+In a **separate terminal**, start the mock resource server:
+
+```bash
+# Start mock resource server (saves key to resource_key.pem)
+python scripts/mock_resource_server.py \
+  --port 9000 \
+  --resource-url http://localhost:9000 \
+  --key-file resource_key.pem
+
+# The server will display:
+# Mock Resource Server
+# Resource URL: http://localhost:9000
+# Listening on: http://0.0.0.0:9000
+# 
+# Endpoints:
+#   GET http://localhost:9000/.well-known/aauth-resource
+#   GET http://localhost:9000/jwks.json
+```
+
+**Verify** the resource server is running:
+```bash
+curl http://localhost:9000/.well-known/aauth-resource | jq
+```
+
+You should see resource metadata with `jwks_uri` pointing to `/jwks.json`.
+
+#### Step 2: Export Agent Public Key
+
+The resource token needs to reference the agent's public key. Export it:
+
+```bash
+# Create a Python script to export the key (or modify aauth_test_client.py)
+python3 <<EOF
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
+import sys
+
+# Generate or load agent key (same as test client uses)
+private_key = Ed25519PrivateKey.generate()
+public_key = private_key.public_key()
+
+# Save public key
+with open('agent_public_key.pem', 'wb') as f:
+    f.write(public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ))
+
+# Save private key for test client
+with open('agent_private_key.pem', 'wb') as f:
+    f.write(private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    ))
+
+print("Agent keys saved to agent_public_key.pem and agent_private_key.pem")
+EOF
+```
+
+#### Step 3: Generate Resource Token
+
+Generate a resource token signed by the resource:
+
+```bash
+python scripts/generate_resource_token.py \
+  --resource-url http://localhost:9000 \
+  --agent-id https://agent.example.com \
+  --agent-public-key-file agent_public_key.pem \
+  --auth-server-id http://localhost:8080/realms/aauth-test \
+  --scope "data.read data.write" \
+  --key-file resource_key.pem
+```
+
+This will output a JWT token. **Save it** to a variable:
+
+```bash
+RESOURCE_TOKEN=$(python scripts/generate_resource_token.py \
+  --resource-url http://localhost:9000 \
+  --agent-id https://agent.example.com \
+  --agent-public-key-file agent_public_key.pem \
+  --auth-server-id http://localhost:8080/realms/aauth-test \
+  --scope "data.read data.write" \
+  --key-file resource_key.pem)
+
+echo "Resource token: $RESOURCE_TOKEN"
+```
+
+#### Step 4: Request Auth Token with Resource Token
+
+Now use the Python test client with the resource token:
+
+```bash
+# Option A: Use Python test client (recommended)
+python scripts/aauth_test_client.py \
+  --base-url http://localhost:8080 \
+  --realm aauth-test \
+  --resource-token "$RESOURCE_TOKEN" \
+  --agent-id https://agent.example.com
+```
+
+**Note**: The Python test client will generate a new agent key pair each time. To use the same agent key that matches the resource token, you'll need to modify the script to load `agent_private_key.pem`, or create a wrapper script.
+
+**Alternative: Manual curl** (requires generating signature manually - see [Creating Signed Requests](#creating-signed-requests))
 
 **Request**:
 ```bash

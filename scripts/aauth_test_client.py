@@ -134,6 +134,16 @@ class AAuthTestClient:
             'body': response.json() if response.status_code == 200 else response.text
         }
     
+    def export_public_key(self, output_file: str):
+        """Export public key to PEM file for use with resource token generation"""
+        public_pem = self.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        with open(output_file, 'wb') as f:
+            f.write(public_pem)
+        print(f"Exported agent public key to {output_file}")
+    
     def request_token(self, base_url: str, realm: str, scope: Optional[str] = None, 
                      resource_token: Optional[str] = None, verbose: bool = False) -> dict:
         """
