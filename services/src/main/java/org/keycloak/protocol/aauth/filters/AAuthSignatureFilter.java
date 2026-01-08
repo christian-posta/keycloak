@@ -27,7 +27,6 @@ import org.keycloak.utils.KeycloakSessionUtil;
 import jakarta.annotation.Priority;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
-import jakarta.ws.rs.container.PreMatching;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 
@@ -40,11 +39,11 @@ import java.io.IOException;
  * It verifies the HTTP Message Signature and stores the agent identity in the request context
  * for use by AAuth endpoints.
  * 
- * Priority is set to run after SSL checks but before authentication flows.
+ * Priority is set to run after session is available but before authentication flows.
+ * Note: Cannot use @PreMatching as session is not available at that time.
  */
 @Provider
-@PreMatching
-@Priority(100) // Run after security headers but before authentication
+@Priority(2000) // Run after session setup but before authentication
 public class AAuthSignatureFilter implements ContainerRequestFilter {
 
     private static final Logger logger = Logger.getLogger(AAuthSignatureFilter.class);
@@ -91,6 +90,11 @@ public class AAuthSignatureFilter implements ContainerRequestFilter {
             requestContext.setProperty("aauth.agent.id", result.getAgentId());
             requestContext.setProperty("aauth.agent.public.key", result.getPublicKey());
             requestContext.setProperty("aauth.signature.scheme", result.getScheme());
+
+            // Also store in session for access by grant types
+            session.setAttribute("aauth.agent.id", result.getAgentId());
+            session.setAttribute("aauth.agent.public.key", result.getPublicKey());
+            session.setAttribute("aauth.signature.scheme", result.getScheme());
 
             logger.debugf("HTTP Message Signature verified for agent: %s", result.getAgentId());
 

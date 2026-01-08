@@ -172,6 +172,12 @@
             <artifactId>resteasy-core</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- For AAuth integration tests - access to HttpRequestImpl and SignatureBaseBuilder -->
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-services</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>jakarta.ws.rs</groupId>
             <artifactId>jakarta.ws.rs-api</artifactId>

@@ -113,9 +113,18 @@ public class HTTPSigVerifier {
 
         // 8. Verify signature
         String algorithm = scheme.getAlgorithm(keyParser);
+        
+        // Debug logging
+        if (logger.isDebugEnabled()) {
+            logger.debugf("Signature base (string): %s", new String(signatureBase, java.nio.charset.StandardCharsets.UTF_8));
+            logger.debugf("Algorithm: %s", algorithm);
+        }
+        
         boolean valid = verifySignature(signatureBase, signatureBytes, publicKey, algorithm);
         
         if (!valid) {
+            logger.warnf("Signature verification failed. Signature base: %s", 
+                new String(signatureBase, java.nio.charset.StandardCharsets.UTF_8));
             throw new SignatureVerificationException("Signature verification failed");
         }
 
