@@ -53,8 +53,13 @@ public class MetadataFetcher {
     public AgentMetadata fetchAgentMetadata(String agentId, String wellKnown) {
         try {
             URI agentUri = new URI(agentId);
-            if (!"https".equals(agentUri.getScheme())) {
-                logger.warnf("Agent identifier must use HTTPS: %s", agentId);
+            String scheme = agentUri.getScheme();
+            String host = agentUri.getHost();
+            
+            // Allow HTTP for localhost/127.0.0.1 for testing purposes
+            boolean isLocalhost = host != null && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("[::1]"));
+            if (!"https".equals(scheme) && !(isLocalhost && "http".equals(scheme))) {
+                logger.warnf("Agent identifier must use HTTPS (or HTTP for localhost): %s", agentId);
                 return null;
             }
 

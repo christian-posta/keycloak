@@ -70,6 +70,9 @@ python scripts/aauth_test_client.py --base-url http://localhost:8080 --realm aau
 
 # Request token with scope
 python scripts/aauth_test_client.py --base-url http://localhost:8080 --realm aauth-test --scope "data.read data.write"
+
+# Resource Token from Mock Server:
+./scripts/test_resource_token_flow.sh
 ```
 
 **Option B: Use curl** (see [Test Scenarios](#test-scenarios) for detailed steps)
