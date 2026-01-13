@@ -26,9 +26,16 @@ import org.keycloak.crypto.SignatureSignerContext;
 import org.keycloak.jose.jwk.JWK;
 import org.keycloak.jose.jwk.JWKBuilder;
 import org.keycloak.jose.jws.JWSBuilder;
+import org.keycloak.TokenVerifier;
+import org.keycloak.common.VerificationException;
+import org.keycloak.crypto.SignatureVerifierContext;
+import org.keycloak.jose.jws.JWSInput;
+import org.keycloak.jose.jws.JWSInputException;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.models.UserSessionModel;
+import org.keycloak.representations.AAuthRefreshToken;
 import org.keycloak.representations.AAuthToken;
 import org.keycloak.services.Urls;
 import org.keycloak.util.JWKSUtils;
@@ -170,6 +177,175 @@ public class AAuthTokenManager {
             return 300; // Default 5 minutes
         }
         return tokenLifespan;
+    }
+
+    /**
+     * Create a refresh token for the given agent and resource.
+     * 
+     * @param realm The realm
+     * @param agentId Agent identifier (HTTPS URL or pseudonymous)
+     * @param agentJkt Agent JWK thumbprint
+     * @param agentDelegate Agent delegate identifier (optional)
+     * @param resourceId Resource identifier
+     * @param scope Space-separated scopes (optional)
+     * @param user User model (optional, for user authorization)
+     * @param agentPublicKey Agent's public signing key (for cnf.jwk)
+     * @return Signed refresh token JWT string
+     */
+    public String createRefreshToken(RealmModel realm, String agentId, String agentJkt, 
+            String agentDelegate, String resourceId, String scope, UserModel user, 
+            PublicKey agentPublicKey) {
+        
+        // Create AAuthRefreshToken instance
+        AAuthRefreshToken refreshToken = new AAuthRefreshToken();
+        
+        // Set issuer
+        String issuer = Urls.realmIssuer(session.getContext().getUri().getBaseUri(), realm.getName());
+        refreshToken.issuer(issuer);
+        
+        // Set audience (resource identifier)
+        refreshToken.audience(new String[] { issuer }); // Refresh tokens have issuer as audience
+        
+        // Set agent binding fields
+        refreshToken.agent(agentId);
+        refreshToken.agentJkt(agentJkt);
+        
+        if (agentDelegate != null) {
+            refreshToken.agentDelegate(agentDelegate);
+        }
+        
+        refreshToken.resourceId(resourceId);
+        
+        // Set scope if provided
+        if (scope != null && !scope.trim().isEmpty()) {
+            refreshToken.setScope(scope);
+        }
+        
+        // Set user claims if user provided
+        if (user != null) {
+            refreshToken.subject(user.getId());
+        }
+        
+        // Set expiration (use realm's refresh token lifespan, or default to 30 days)
+        int refreshTokenLifespan = realm.getSsoSessionMaxLifespan();
+        if (refreshTokenLifespan == -1) {
+            refreshTokenLifespan = 2592000; // Default 30 days
+        }
+        long expiration = Time.currentTime() + refreshTokenLifespan;
+        refreshToken.exp(expiration);
+        
+        // Set issued at
+        refreshToken.issuedNow();
+        
+        // Generate token ID
+        refreshToken.id(org.keycloak.models.utils.KeycloakModelUtils.generateId());
+        
+        // Convert agent's public key to JWK for cnf.jwk
+        JWK agentJwk = convertPublicKeyToJWK(agentPublicKey);
+        refreshToken.setCnfJwk(agentJwk);
+        
+        // Get realm signing key and algorithm
+        // Use ACCESS category (same as access tokens) instead of INTERNAL to avoid HMAC
+        String signingAlgorithm = session.tokens().signatureAlgorithm(org.keycloak.TokenCategory.ACCESS);
+        KeyWrapper signingKey = session.keys().getActiveKey(realm, KeyUse.SIG, signingAlgorithm);
+        
+        if (signingKey == null) {
+            throw new RuntimeException("Active signing key not found for algorithm: " + signingAlgorithm);
+        }
+        
+        // Create signer context
+        SignatureProvider signatureProvider = session.getProvider(SignatureProvider.class, signingAlgorithm);
+        SignatureSignerContext signer = signatureProvider.signer(signingKey);
+        
+        // Build and sign JWT with typ="refresh+jwt"
+        String signedToken = new JWSBuilder()
+                .type("refresh+jwt")
+                .kid(signingKey.getKid())
+                .jsonContent(refreshToken)
+                .sign(signer);
+        
+        logger.debugf("Created refresh token for agent: %s, resource: %s", agentId, resourceId);
+        
+        return signedToken;
+    }
+
+    /**
+     * Validate and parse a refresh token.
+     * 
+     * @param realm The realm
+     * @param encodedRefreshToken Encoded refresh token JWT string
+     * @return Parsed and validated refresh token
+     * @throws VerificationException If token is invalid
+     */
+    public AAuthRefreshToken validateRefreshToken(RealmModel realm, String encodedRefreshToken) 
+            throws VerificationException {
+        
+        try {
+            // Parse JWT
+            JWSInput jwsInput = new JWSInput(encodedRefreshToken);
+            
+            // Verify token type
+            if (!"refresh+jwt".equals(jwsInput.getHeader().getType())) {
+                throw new VerificationException("Invalid refresh token type");
+            }
+            
+            // Get algorithm and key ID from token header
+            String algorithm = jwsInput.getHeader().getAlgorithm().name();
+            String kid = jwsInput.getHeader().getKeyId();
+            
+            // Get signature verifier context from realm keys
+            SignatureProvider signatureProvider = session.getProvider(SignatureProvider.class, algorithm);
+            if (signatureProvider == null) {
+                throw new VerificationException("Unsupported signature algorithm: " + algorithm);
+            }
+            
+            SignatureVerifierContext verifierContext = signatureProvider.verifier(kid);
+            
+            // Verify signature and claims
+            String issuer = Urls.realmIssuer(session.getContext().getUri().getBaseUri(), realm.getName());
+            TokenVerifier<AAuthRefreshToken> verifier = TokenVerifier.create(encodedRefreshToken, AAuthRefreshToken.class)
+                    .withChecks(
+                            TokenVerifier.IS_ACTIVE,
+                            new TokenVerifier.RealmUrlCheck(issuer)
+                    )
+                    .verifierContext(verifierContext);
+            
+            AAuthRefreshToken refreshToken = verifier.verify().getToken();
+            
+            return refreshToken;
+            
+        } catch (JWSInputException e) {
+            throw new VerificationException("Invalid refresh token format", e);
+        }
+    }
+
+    /**
+     * Generate a new auth token from a refresh token.
+     * 
+     * @param realm The realm
+     * @param refreshToken Validated refresh token
+     * @param agentPublicKey Current agent's public key (for cnf.jwk in new token)
+     * @return New signed auth token JWT string
+     */
+    public String refreshAuthToken(RealmModel realm, AAuthRefreshToken refreshToken, 
+            PublicKey agentPublicKey) {
+        
+        // Get user session if subject is present
+        UserModel user = null;
+        if (refreshToken.getSubject() != null && refreshToken.getSessionId() != null) {
+            UserSessionModel userSession = session.sessions().getUserSession(realm, refreshToken.getSessionId());
+            if (userSession != null) {
+                user = userSession.getUser();
+            }
+        }
+        
+        // Create new auth token with same parameters as refresh token
+        String agentId = refreshToken.getAgent();
+        String agentDelegate = refreshToken.getAgentDelegate();
+        String resourceId = refreshToken.getResourceId();
+        String scope = refreshToken.getScope();
+        
+        return createAuthToken(realm, agentId, agentDelegate, agentPublicKey, resourceId, scope, user);
     }
 }
 

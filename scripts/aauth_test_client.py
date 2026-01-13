@@ -344,6 +344,53 @@ class AAuthTestClient:
         
         return result
     
+    def refresh_token(self, base_url: str, realm: str, refresh_token: str,
+                     verbose: bool = False) -> dict:
+        """
+        Refresh an auth token using a refresh token.
+        
+        Args:
+            base_url: Keycloak base URL (e.g., http://localhost:8080)
+            realm: Realm name
+            refresh_token: Refresh token JWT
+        
+        Returns:
+            Dictionary with status_code, headers, and body
+        """
+        token_url = f"{base_url}/realms/{realm}/protocol/aauth/agent/token"
+        
+        # Build form data
+        form_data = {
+            'request_type': 'refresh',
+            'refresh_token': refresh_token
+        }
+        
+        # Convert form data to bytes for signature
+        form_data_bytes = urllib.parse.urlencode(form_data).encode('utf-8')
+        
+        # Create signed request (include body for content-digest)
+        headers = self.create_signed_headers('POST', token_url, body=form_data_bytes, verbose=verbose)
+        
+        # Make request
+        response = requests.post(token_url, headers=headers, data=form_data)
+        
+        result = {
+            'status_code': response.status_code,
+            'headers': dict(response.headers)
+        }
+        
+        # Parse response body
+        content_type = response.headers.get('content-type', '')
+        if 'application/json' in content_type:
+            try:
+                result['body'] = response.json()
+            except:
+                result['body'] = response.text
+        else:
+            result['body'] = response.text
+        
+        return result
+    
     def print_key_info(self):
         """Print key information for reference"""
         print(f"Agent ID: {self.agent_id}")
@@ -360,6 +407,7 @@ def main():
     parser.add_argument('--resource-token', help='Resource token JWT (for resource authorization)')
     parser.add_argument('--redirect-uri', help='Redirect URI for user consent flow')
     parser.add_argument('--code', help='Authorization code for code exchange')
+    parser.add_argument('--refresh-token', help='Refresh token for token refresh')
     parser.add_argument('--metadata', action='store_true', help='Fetch metadata only')
     parser.add_argument('--agent-id', default='https://agent.example.com', help='Agent identifier')
     parser.add_argument('--key-file', default='.aauth_test_key.pem', help='File to save/load key pair (default: .aauth_test_key.pem)')
@@ -420,6 +468,37 @@ def main():
                 print(f"\nToken (first 50 chars): {result['body']['auth_token'][:50]}...")
                 if 'refresh_token' in result['body']:
                     print(f"Refresh Token: {result['body']['refresh_token'][:50]}...")
+                    print(f"\nTo refresh this token, use:")
+                    print(f"  python {sys.argv[0]} --base-url {args.base_url} --realm {args.realm} --refresh-token {result['body']['refresh_token']}")
+            
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+    
+    # Refresh token flow
+    if args.refresh_token:
+        print("Refreshing auth token...")
+        if args.verbose:
+            print(f"  URL: {args.base_url}/realms/{args.realm}/protocol/aauth/agent/token")
+            print(f"  Refresh Token: {args.refresh_token[:50]}...")
+            print()
+        
+        try:
+            result = client.refresh_token(
+                args.base_url,
+                args.realm,
+                args.refresh_token,
+                verbose=args.verbose
+            )
+            
+            print(f"Status: {result['status_code']}")
+            print(f"\nResponse:\n{json.dumps(result['body'], indent=2)}")
+            
+            if result['status_code'] == 200 and 'auth_token' in result['body']:
+                print("\n✅ Token refreshed successfully!")
+                print(f"\nNew Token (first 50 chars): {result['body']['auth_token'][:50]}...")
+                print(f"Expires In: {result['body'].get('expires_in', 'N/A')} seconds")
             
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
@@ -427,8 +506,8 @@ def main():
         return
     
     # Token request flow
-    if not args.scope and not args.resource_token:
-        print("ERROR: Either --scope, --resource-token, or --code must be provided")
+    if not args.scope and not args.resource_token and not args.code and not args.refresh_token:
+        print("ERROR: Either --scope, --resource-token, --code, or --refresh-token must be provided")
         parser.print_help()
         sys.exit(1)
     

@@ -142,9 +142,9 @@ public class CodeGrantType implements OAuth2GrantType {
         String authToken = tokenManager.createAuthToken(realm, agentId, null, agentPublicKey,
                 codeData.getResourceId(), codeData.getScope(), user);
 
-        // Create refresh token (Phase 4 will implement proper refresh token)
-        // For now, we'll create a simple refresh token
-        String refreshToken = createRefreshToken(session, realm, agentId, agentJkt, user.getId());
+        // Create refresh token with agent binding
+        String refreshToken = tokenManager.createRefreshToken(realm, agentId, agentJkt, null,
+                codeData.getResourceId(), codeData.getScope(), user, agentPublicKey);
 
         // Create response
         AAuthTokenResponse response = new AAuthTokenResponse();
@@ -197,16 +197,6 @@ public class CodeGrantType implements OAuth2GrantType {
         return codeData;
     }
 
-    /**
-     * Create a refresh token (simplified for Phase 3).
-     * Phase 4 will implement proper refresh token with binding.
-     */
-    private String createRefreshToken(KeycloakSession session, RealmModel realm, String agentId,
-            String agentJkt, String userId) {
-        // For Phase 3, create a simple refresh token
-        // Phase 4 will implement proper refresh token with agent binding
-        return "refresh_token_" + agentId + "_" + userId + "_" + Time.currentTime();
-    }
 
     @Override
     public void close() {

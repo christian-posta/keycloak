@@ -9,3 +9,4 @@ org.keycloak.protocol.oidc.grants.device.DeviceGrantTypeFactory
 org.keycloak.protocol.oidc.grants.PreAuthorizedCodeGrantTypeFactory
 org.keycloak.protocol.aauth.grants.AuthGrantTypeFactory
 org.keycloak.protocol.aauth.grants.CodeGrantTypeFactory
+org.keycloak.protocol.aauth.grants.RefreshGrantTypeFactory
