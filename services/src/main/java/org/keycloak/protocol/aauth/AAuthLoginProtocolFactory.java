@@ -76,8 +76,7 @@ public class AAuthLoginProtocolFactory implements LoginProtocolFactory {
 
     @Override
     public LoginProtocol create(KeycloakSession session) {
-        // AAuth doesn't use traditional login protocol flow
-        return null;
+        return new AAuthLoginProtocol();
     }
 
     @Override

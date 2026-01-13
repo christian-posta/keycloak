@@ -23,6 +23,7 @@ import org.keycloak.events.EventType;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.protocol.aauth.AAuthTokenManager;
+import org.keycloak.protocol.aauth.storage.AAuthRequestTokenStore;
 import org.keycloak.protocol.aauth.tokens.ResourceTokenValidator;
 import org.keycloak.protocol.oidc.grants.OAuth2GrantType;
 import org.keycloak.representations.AAuthTokenResponse;
@@ -86,15 +87,17 @@ public class AuthGrantType implements OAuth2GrantType {
                     "Agent identity not found. Request must be signed with HTTPSig.", Response.Status.UNAUTHORIZED);
         }
 
-        return processGrant(session, realm, cors, agentId, agentPublicKey, context);
+        return processGrant(session, realm, cors, agentId, agentPublicKey, signatureScheme, context);
     }
 
     private Response processGrant(KeycloakSession session, RealmModel realm, Cors cors,
-            String agentId, PublicKey agentPublicKey, Context context) {
+            String agentId, PublicKey agentPublicKey, String signatureScheme, Context context) {
         
         String resourceToken = context.getFormParams().getFirst("resource_token");
         String scope = context.getFormParams().getFirst("scope");
         String authRequestUrl = context.getFormParams().getFirst("auth_request_url");
+        String redirectUri = context.getFormParams().getFirst("redirect_uri");
+        String state = context.getFormParams().getFirst("state");
 
         String resourceId;
         String grantedScope = null;
@@ -132,8 +135,36 @@ public class AuthGrantType implements OAuth2GrantType {
                     "Missing required parameter: resource_token or scope", Response.Status.BAD_REQUEST);
         }
 
-        // Evaluate authorization policy (basic check for Phase 2)
-        // TODO: Enhance with proper authorization policy evaluation in future phases
+        // Evaluate authorization policy - determine if user consent is required
+        boolean requiresConsent = requiresUserConsent(realm, grantedScope, resourceId);
+        
+        if (requiresConsent) {
+            // User consent required - issue request_token
+            if (redirectUri == null || redirectUri.isEmpty()) {
+                throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                        "redirect_uri is required when user consent is needed", Response.Status.BAD_REQUEST);
+            }
+            
+            AAuthTokenManager tokenManager = new AAuthTokenManager(session);
+            String agentJkt = tokenManager.calculateAgentJkt(agentPublicKey);
+            
+            AAuthRequestTokenStore tokenStore = new AAuthRequestTokenStore(session);
+            String requestToken = tokenStore.createRequestToken(
+                    agentId, agentJkt, signatureScheme, resourceId, grantedScope,
+                    authRequestUrl, redirectUri, state);
+            
+            AAuthTokenResponse response = new AAuthTokenResponse();
+            response.setRequestToken(requestToken);
+            response.setExpiresIn(600); // 10 minutes
+            response.setTokenType("AAuth");
+            
+            logger.debugf("Issued request_token for agent: %s, resource: %s (user consent required)", agentId, resourceId);
+            
+            return cors.add(Response.ok(response, MediaType.APPLICATION_JSON_TYPE));
+        }
+
+        // Direct grant - no user consent needed
+        // Evaluate authorization policy (basic check)
         if (!isAuthorized(realm, agentId, resourceId, grantedScope)) {
             throw new CorsErrorResponseException(cors, OAuthErrorException.ACCESS_DENIED,
                     "Authorization denied", Response.Status.FORBIDDEN);
@@ -153,6 +184,37 @@ public class AuthGrantType implements OAuth2GrantType {
         logger.debugf("Issued auth token for agent: %s, resource: %s", agentId, resourceId);
 
         return cors.add(Response.ok(response, MediaType.APPLICATION_JSON_TYPE));
+    }
+
+    /**
+     * Determine if user consent is required for this authorization request.
+     * 
+     * Phase 3: Basic policy - require consent for user-specific scopes.
+     */
+    private boolean requiresUserConsent(RealmModel realm, String scope, String resourceId) {
+        if (scope != null && !scope.trim().isEmpty()) {
+            String[] scopes = scope.split("\\s+");
+            for (String s : scopes) {
+                if (isUserScope(s)) {
+                    return true;
+                }
+            }
+        }
+        // Future: Check resource-specific policies, user context requirements, etc.
+        return false;
+    }
+
+    /**
+     * Check if a scope requires user consent.
+     */
+    private boolean isUserScope(String scope) {
+        // User-specific scopes that require consent
+        return "profile".equals(scope) || 
+               "email".equals(scope) || 
+               "openid".equals(scope) ||
+               scope.startsWith("user.") ||
+               scope.startsWith("profile.") ||
+               scope.startsWith("email.");
     }
 
     /**

@@ -22,6 +22,7 @@ import org.keycloak.events.EventBuilder;
 import org.keycloak.jose.jwk.JSONWebKeySet;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
+import org.keycloak.protocol.aauth.endpoints.AAuthAuthorizationEndpoint;
 import org.keycloak.protocol.aauth.endpoints.AAuthTokenEndpoint;
 import org.keycloak.protocol.oidc.utils.JWKSServerUtils;
 import org.keycloak.services.cors.Cors;
@@ -64,11 +65,7 @@ public class AAuthProtocolService {
      */
     @Path("agent/auth")
     public Object agentAuth() {
-        // Placeholder for Phase 3
-        return Response.status(Response.Status.NOT_IMPLEMENTED)
-                .entity("{\"error\":\"not_implemented\",\"error_description\":\"User consent flow not yet implemented\"}")
-                .type(MediaType.APPLICATION_JSON)
-                .build();
+        return new AAuthAuthorizationEndpoint(session, event);
     }
 
     @OPTIONS
