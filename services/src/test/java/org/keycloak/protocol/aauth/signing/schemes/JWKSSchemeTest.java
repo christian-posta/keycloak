@@ -31,10 +31,9 @@ import org.keycloak.protocol.aauth.metadata.AgentMetadata;
 import org.keycloak.protocol.aauth.signing.SignatureKeyParser;
 import org.keycloak.protocol.aauth.signing.exceptions.SignatureKeyParseException;
 import org.keycloak.protocol.aauth.signing.exceptions.SignatureVerificationException;
-import org.keycloak.services.resteasy.ResteasyKeycloakSession;
-import org.keycloak.services.resteasy.ResteasyKeycloakSessionFactory;
 import org.keycloak.util.JsonSerialization;
 
+import java.lang.reflect.Proxy;
 import java.security.KeyPair;
 import java.security.PublicKey;
 import java.util.HashMap;
@@ -47,32 +46,47 @@ import static org.junit.Assert.*;
  */
 public class JWKSSchemeTest {
 
-    private static ResteasyKeycloakSessionFactory sessionFactory;
     private KeycloakSession session;
     private Map<String, String> httpResponses;
+    private Map<String, Object> sessionAttributes;
 
     @BeforeClass
     public static void beforeClass() {
         Profile.defaults();
         CryptoIntegration.init(CryptoProvider.class.getClassLoader());
-        sessionFactory = new ResteasyKeycloakSessionFactory();
-        sessionFactory.init();
     }
 
     @Before
     public void setUp() {
-        session = new ResteasyKeycloakSession(sessionFactory) {
-            @Override
-            public <T extends org.keycloak.provider.Provider> T getProvider(Class<T> clazz) {
-                if (clazz == HttpClientProvider.class) {
-                    @SuppressWarnings("unchecked")
-                    T provider = (T) createMockHttpClientProvider();
-                    return provider;
-                }
-                return super.getProvider(clazz);
-            }
-        };
         httpResponses = new HashMap<>();
+        sessionAttributes = new HashMap<>();
+        
+        // Create a mock KeycloakSession using Proxy
+        session = (KeycloakSession) Proxy.newProxyInstance(
+            JWKSSchemeTest.class.getClassLoader(),
+            new Class[]{KeycloakSession.class},
+            (proxy, method, args) -> {
+                switch (method.getName()) {
+                    case "getProvider":
+                        if (args.length > 0 && args[0] == HttpClientProvider.class) {
+                            return createMockHttpClientProvider();
+                        }
+                        return null;
+                    case "setAttribute":
+                        if (args.length >= 2) {
+                            sessionAttributes.put((String) args[0], args[1]);
+                        }
+                        return null;
+                    case "getAttribute":
+                        if (args.length >= 1) {
+                            return sessionAttributes.get(args[0]);
+                        }
+                        return null;
+                    default:
+                        return null;
+                }
+            }
+        );
     }
 
     private HttpClientProvider createMockHttpClientProvider() {
