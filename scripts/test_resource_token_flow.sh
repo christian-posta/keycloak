@@ -198,7 +198,7 @@ created = int(time.time())
 signature_base = f'"@method": {method.upper()}\\n'
 signature_base += f'"@authority": {authority.lower()}\\n'
 signature_base += f'"@path": {path}\\n'
-signature_base += f'"@signature-params": (@method @authority @path);created={created}'
+signature_base += f'"@signature-params": ("@method" "@authority" "@path");created={created}'
 
 signature_bytes = private_key.sign(signature_base.encode('utf-8'))
 signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode().rstrip('=')
