@@ -427,89 +427,13 @@ resource_token=<resource_token_jwt>
 
 ## Cross-Server Exchange (Advanced)
 
-**Note**: Cross-server exchange (federation) is supported but not the primary focus. This section covers testing with multiple Keycloak instances.
+Cross-server exchange (federation) is supported but requires additional setup:
 
-### Setup for Cross-Server Exchange
+1. **Run two Keycloak instances** on different ports (e.g., 8080 and 8081)
+2. **Configure trust** by adding the upstream issuer to `aauth.trusted.issuers` realm attribute
+3. **Exchange tokens** using the same flow as same-server exchange
 
-**Prerequisites:**
-1. Two Keycloak instances running (main server and upstream server)
-2. Upstream server configured as trusted in main server
-
-### Configure Trust
-
-**Step 1: Get Upstream Server Issuer**
-
-The upstream server's issuer is typically: `http://localhost:8081/realms/upstream-realm`
-
-**Step 2: Configure Trust in Main Server**
-
-Add the upstream issuer to the main realm's trusted issuers:
-
-**Using Admin Console:**
-1. Navigate to Realm Settings → Attributes
-2. Add attribute: `aauth.trusted.issuers`
-3. Value: `["http://localhost:8081/realms/upstream-realm"]`
-
-**Using Admin REST API:**
-```bash
-curl -X PUT "http://localhost:8080/admin/realms/aauth-test" \
-  -H "Authorization: Bearer $(./scripts/get_admin_token.sh)" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "attributes": {
-      "aauth.trusted.issuers": "[\"http://localhost:8081/realms/upstream-realm\"]"
-    }
-  }'
-```
-
-### Test Cross-Server Exchange
-
-**Step 1: Get Upstream Auth Token**
-
-```bash
-python scripts/aauth_test_client.py \
-  --base-url http://localhost:8081 \
-  --realm upstream-realm \
-  --agent-id "https://upstream-agent.example.com" \
-  --scope "profile email data.read" \
-  --resource-id "https://resource1.example.com" \
-  --user-login test-user \
-  --user-password password \
-  --verbose
-```
-
-**Step 2: Create Resource Token**
-
-```bash
-python scripts/aauth_test_client.py \
-  --base-url http://localhost:8080 \
-  --realm aauth-test \
-  --create-mock-resource-token \
-  --agent-id "https://current-agent.example.com" \
-  --aud-agent-id "https://upstream-agent.example.com" \
-  --resource-id "https://resource2.example.com" \
-  --scope "data.read" \
-  --auth-server-id "http://localhost:8080/realms/aauth-test" \
-  --verbose
-```
-
-**Step 3: Exchange Token**
-
-```bash
-python scripts/aauth_test_client.py \
-  --base-url http://localhost:8080 \
-  --realm aauth-test \
-  --exchange \
-  --upstream-token <UPSTREAM_AUTH_TOKEN> \
-  --resource-token <RESOURCE_TOKEN> \
-  --scope "data.read" \
-  --verbose
-```
-
-**Expected Result:**
-- New `auth_token` issued by main server
-- `act` claim shows upstream agent from upstream server
-- Token can be used to access Resource 2
+For detailed federation configuration, refer to the [AAuth Specification](../SPEC.md).
 
 ## Troubleshooting
 
