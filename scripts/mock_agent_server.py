@@ -77,7 +77,7 @@ class MockAgentHandler(BaseHTTPRequestHandler):
         pass
 
 
-def create_jwks(public_key: Ed25519PublicKey, kid: str = "agent-key-1") -> dict:
+def create_jwks(public_key: Ed25519PublicKey, kid: str = None) -> dict:
     """Create JWKS from Ed25519 public key"""
     # Serialize public key
     public_bytes = public_key.public_bytes(
@@ -87,6 +87,10 @@ def create_jwks(public_key: Ed25519PublicKey, kid: str = "agent-key-1") -> dict:
     
     # Base64URL encode
     x = base64.urlsafe_b64encode(public_bytes).decode('utf-8').rstrip('=')
+    
+    # If kid not specified, derive from first 16 bytes of public key (same as test client)
+    if kid is None:
+        kid = base64.urlsafe_b64encode(public_bytes[:16]).decode('utf-8').rstrip('=')
     
     return {
         "keys": [
@@ -108,7 +112,7 @@ def main():
     parser.add_argument("--agent-url", type=str, default="http://localhost:9001",
                        help="Agent URL (default: http://localhost:9001)")
     parser.add_argument("--key-file", type=str, help="Path to save/load private key (PEM format)")
-    parser.add_argument("--kid", type=str, default="agent-key-1", help="Key ID for JWKS")
+    parser.add_argument("--kid", type=str, default=None, help="Key ID for JWKS (default: derived from public key)")
     
     args = parser.parse_args()
     

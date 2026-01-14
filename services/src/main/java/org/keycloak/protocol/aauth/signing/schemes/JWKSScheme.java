@@ -17,6 +17,7 @@
 
 package org.keycloak.protocol.aauth.signing.schemes;
 
+import org.jboss.logging.Logger;
 import org.keycloak.jose.jwk.JWK;
 import org.keycloak.jose.jwk.JWKParser;
 import org.keycloak.jose.jwk.JSONWebKeySet;
@@ -38,6 +39,8 @@ import java.security.PublicKey;
  * See AAuth spec Section 10.7 for details.
  */
 public class JWKSScheme implements SignatureScheme {
+
+    private static final Logger logger = Logger.getLogger(JWKSScheme.class);
 
     private final KeycloakSession session;
 
@@ -148,7 +151,10 @@ public class JWKSScheme implements SignatureScheme {
     public String getAgentId(SignatureKeyParser keyParser) {
         // For Mode 2, agent ID is the 'id' parameter
         // For Mode 1, there's no agent identity (just a JWKS URL)
-        return keyParser.getAgentId();
+        String agentId = keyParser.getAgentId();
+        logger.debugf("JWKSScheme.getAgentId: id parameter = %s, all params = %s", 
+                agentId, keyParser.getParameters());
+        return agentId;
     }
 }
 

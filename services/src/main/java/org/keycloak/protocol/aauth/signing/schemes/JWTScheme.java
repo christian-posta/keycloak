@@ -73,6 +73,10 @@ public class JWTScheme implements SignatureScheme {
             // Validate auth token and extract cnf.jwk
             AuthTokenValidator validator = new AuthTokenValidator(session);
             Map<String, Object> cnf = validator.validateAndExtractCnf(jwtString);
+            
+            // Store the full JWT string in session for token exchange (Phase 4)
+            session.setAttribute("aauth.upstream.auth.token", jwtString);
+            
             return extractPublicKeyFromCnf(cnf);
             
         } else {
@@ -100,30 +104,68 @@ public class JWTScheme implements SignatureScheme {
 
     @Override
     public String getAlgorithm(SignatureKeyParser keyParser) {
+        // For scheme=jwt, the HTTP request is signed by the agent's key from cnf.jwk,
+        // NOT by the auth server's key used to sign the JWT itself.
+        // We must extract the algorithm from the cnf.jwk claim.
         try {
             String jwtString = keyParser.getJWT();
             if (jwtString == null) {
                 return "Ed25519"; // Default
             }
             
-            // Parse JWT header to get algorithm
+            // Parse JWT to extract cnf.jwk
             JWSInput jws = new JWSInput(jwtString);
-            String alg = jws.getHeader().getRawAlgorithm();
+            JsonWebToken token = jws.readJsonContent(JsonWebToken.class);
             
-            // Map JWT algorithm names to HTTPSig algorithm names
+            Map<String, Object> otherClaims = token.getOtherClaims();
+            if (otherClaims == null) {
+                return "Ed25519"; // Default
+            }
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> cnf = (Map<String, Object>) otherClaims.get("cnf");
+            if (cnf == null) {
+                return "Ed25519"; // Default
+            }
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> jwk = (Map<String, Object>) cnf.get("jwk");
+            if (jwk == null) {
+                return "Ed25519"; // Default
+            }
+            
+            // Determine algorithm from JWK properties
+            String kty = (String) jwk.get("kty");
+            String crv = (String) jwk.get("crv");
+            String alg = (String) jwk.get("alg");
+            
+            // If explicit algorithm is in JWK, use it
             if (alg != null) {
-                // EdDSA uses Ed25519 in HTTPSig
                 if ("EdDSA".equals(alg)) {
+                    return "Ed25519"; // HTTPSig uses curve name
+                }
+                return alg;
+            }
+            
+            // Infer algorithm from key type and curve
+            if ("OKP".equals(kty)) {
+                // Edwards curves
+                if ("Ed25519".equals(crv)) {
                     return "Ed25519";
+                } else if ("Ed448".equals(crv)) {
+                    return "Ed448";
                 }
-                // RSA algorithms map directly
-                if (alg.startsWith("RS") || alg.startsWith("PS")) {
-                    return alg;
+            } else if ("EC".equals(kty)) {
+                // ECDSA curves
+                if ("P-256".equals(crv)) {
+                    return "ES256";
+                } else if ("P-384".equals(crv)) {
+                    return "ES384";
+                } else if ("P-521".equals(crv)) {
+                    return "ES512";
                 }
-                // EC algorithms map directly
-                if (alg.startsWith("ES")) {
-                    return alg;
-                }
+            } else if ("RSA".equals(kty)) {
+                return "RS256"; // Default RSA algorithm
             }
             
             return "Ed25519"; // Default fallback
@@ -150,12 +192,21 @@ public class JWTScheme implements SignatureScheme {
                 return token.getIssuer();
             } else if ("auth+jwt".equals(typ)) {
                 // For auth tokens, agent ID is in the 'agent' claim
+                // If 'agent' claim is missing, fall back to 'aud' claim
+                // (this happens when agent acts as its own resource, i.e., aud == agent)
                 Map<String, Object> otherClaims = token.getOtherClaims();
                 if (otherClaims != null) {
                     Object agent = otherClaims.get("agent");
                     if (agent instanceof String) {
                         return (String) agent;
                     }
+                }
+                
+                // Fall back to audience (aud) for agent-as-resource case
+                // Per AAuth spec, when agent == aud, the 'agent' claim may be omitted
+                String[] audiences = token.getAudience();
+                if (audiences != null && audiences.length > 0) {
+                    return audiences[0];
                 }
             }
             

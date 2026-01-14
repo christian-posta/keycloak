@@ -75,6 +75,7 @@ public class AAuthSignatureFilter implements ContainerRequestFilter {
 
         // Check if Signature-Key header is present
         String signatureKey = request.getHttpHeaders().getHeaderString("Signature-Key");
+        logger.infof("AAuthSignatureFilter: path=%s, Signature-Key present=%s", path, signatureKey != null);
         if (signatureKey == null) {
             // No signature - this might be acceptable for some endpoints, let them handle it
             logger.debug("No Signature-Key header present for AAuth endpoint");
@@ -86,6 +87,9 @@ public class AAuthSignatureFilter implements ContainerRequestFilter {
             HTTPSigVerifier verifier = new HTTPSigVerifier(session);
             HTTPSigVerifier.VerificationResult result = verifier.verify(request);
 
+            logger.infof("AAuthSignatureFilter: Signature verified, agentId=%s, publicKey=%s, scheme=%s",
+                    result.getAgentId(), result.getPublicKey() != null, result.getScheme());
+
             // Store agent identity in request context for use by endpoints
             requestContext.setProperty("aauth.agent.id", result.getAgentId());
             requestContext.setProperty("aauth.agent.public.key", result.getPublicKey());
@@ -95,6 +99,9 @@ public class AAuthSignatureFilter implements ContainerRequestFilter {
             session.setAttribute("aauth.agent.id", result.getAgentId());
             session.setAttribute("aauth.agent.public.key", result.getPublicKey());
             session.setAttribute("aauth.signature.scheme", result.getScheme());
+
+            // If scheme=jwt with auth+jwt token, the upstream token is already stored by JWTScheme
+            // This is used for token exchange flows (Phase 4)
 
             logger.debugf("HTTP Message Signature verified for agent: %s", result.getAgentId());
 

@@ -17,6 +17,7 @@
 
 package org.keycloak.protocol.aauth.signing;
 
+import org.jboss.logging.Logger;
 import org.keycloak.protocol.aauth.signing.exceptions.SignatureKeyParseException;
 
 import java.util.HashMap;
@@ -31,6 +32,8 @@ import java.util.Map;
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc8941">RFC 8941: Structured Field Values for HTTP</a>
  */
 public class SignatureKeyParser {
+
+    private static final Logger logger = Logger.getLogger(SignatureKeyParser.class);
 
     private final String signatureLabel;
     private final String scheme;
@@ -87,6 +90,9 @@ public class SignatureKeyParser {
             String paramValue = parseValue(param.substring(paramEquals + 1).trim());
             parameters.put(paramName, paramValue);
         }
+        
+        logger.debugf("SignatureKeyParser: parsed header - label=%s, scheme=%s, parameters=%s", 
+                signatureLabel, scheme, parameters);
     }
 
     /**

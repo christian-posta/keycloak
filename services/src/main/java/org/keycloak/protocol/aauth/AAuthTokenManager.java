@@ -35,12 +35,14 @@ import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserSessionModel;
+import org.keycloak.representations.AAuthActorClaim;
 import org.keycloak.representations.AAuthRefreshToken;
 import org.keycloak.representations.AAuthToken;
 import org.keycloak.services.Urls;
 import org.keycloak.util.JWKSUtils;
 
 import java.security.PublicKey;
+import java.util.Map;
 
 /**
  * Token manager for creating AAuth tokens.
@@ -346,6 +348,101 @@ public class AAuthTokenManager {
         String scope = refreshToken.getScope();
         
         return createAuthToken(realm, agentId, agentDelegate, agentPublicKey, resourceId, scope, user);
+    }
+
+    /**
+     * Create an auth token with an actor claim for token exchange scenarios.
+     * 
+     * @param realm The realm
+     * @param agentId Agent HTTPS URL (current agent making the exchange request)
+     * @param agentDelegate Agent delegate identifier (optional)
+     * @param agentPublicKey Agent's public signing key (for cnf.jwk)
+     * @param resourceId Resource identifier (aud claim)
+     * @param scope Space-separated scopes (optional, must be narrowed from upstream scope)
+     * @param user User model (optional, for user authorization)
+     * @param actorClaim Actor claim representing the upstream agent delegation chain
+     * @return Signed auth token JWT string with act claim
+     */
+    public String createAuthTokenWithActor(RealmModel realm, String agentId, String agentDelegate,
+            PublicKey agentPublicKey, String resourceId, String scope, UserModel user,
+            AAuthActorClaim actorClaim) {
+        
+        // Create AAuthToken instance
+        AAuthToken token = new AAuthToken();
+        
+        // Set issuer
+        String issuer = Urls.realmIssuer(session.getContext().getUri().getBaseUri(), realm.getName());
+        token.issuer(issuer);
+        
+        // Set audience (resource identifier)
+        token.audience(resourceId);
+        
+        // Set agent claim (current agent making the exchange request)
+        token.agent(agentId);
+        
+        // Set agent_delegate if present
+        if (agentDelegate != null) {
+            token.agentDelegate(agentDelegate);
+        }
+        
+        // Set scope if provided
+        if (scope != null && !scope.trim().isEmpty()) {
+            token.setScope(scope);
+        }
+        
+        // Set user claims if user provided
+        // If upstream token had a user, preserve it through the delegation chain
+        if (user != null) {
+            token.subject(user.getId());
+        } else if (actorClaim != null && actorClaim.getSub() != null) {
+            // Preserve upstream user subject if present
+            token.subject(actorClaim.getSub());
+        }
+        
+        // Set expiration (use realm's access token lifespan)
+        int tokenLifespan = realm.getAccessTokenLifespan();
+        if (tokenLifespan == -1) {
+            tokenLifespan = 300; // Default 5 minutes if not configured
+        }
+        long expiration = Time.currentTime() + tokenLifespan;
+        token.exp(expiration);
+        
+        // Set issued at
+        token.issuedNow();
+        
+        // Convert agent's public key to JWK for cnf.jwk
+        JWK agentJwk = convertPublicKeyToJWK(agentPublicKey);
+        token.setCnfJwk(agentJwk);
+        
+        // Set actor claim (convert to Map for JWT)
+        if (actorClaim != null) {
+            Map<String, Object> actMap = actorClaim.toMap();
+            token.setAct(actMap);
+        }
+        
+        // Get realm signing key and algorithm
+        String signingAlgorithm = session.tokens().signatureAlgorithm(org.keycloak.TokenCategory.ACCESS);
+        KeyWrapper signingKey = session.keys().getActiveKey(realm, KeyUse.SIG, signingAlgorithm);
+        
+        if (signingKey == null) {
+            throw new RuntimeException("Active signing key not found for algorithm: " + signingAlgorithm);
+        }
+        
+        // Create signer context
+        SignatureProvider signatureProvider = session.getProvider(SignatureProvider.class, signingAlgorithm);
+        SignatureSignerContext signer = signatureProvider.signer(signingKey);
+        
+        // Build and sign JWT with typ="auth+jwt"
+        String signedToken = new JWSBuilder()
+                .type("auth+jwt")
+                .kid(signingKey.getKid())
+                .jsonContent(token)
+                .sign(signer);
+        
+        logger.debugf("Created auth token with actor claim for agent: %s, resource: %s, upstream agent: %s", 
+                agentId, resourceId, actorClaim != null ? actorClaim.getAgent() : "N/A");
+        
+        return signedToken;
     }
 }
 

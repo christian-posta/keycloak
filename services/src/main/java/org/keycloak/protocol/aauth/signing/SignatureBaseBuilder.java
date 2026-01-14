@@ -147,24 +147,35 @@ public class SignatureBaseBuilder {
     /**
      * Build the @signature-params value from parsed Signature-Input.
      * 
+     * Per RFC 9421, the @signature-params value is the serialized signature parameters,
+     * with component names quoted and space-separated inside parentheses.
+     * 
      * @param parser The parsed Signature-Input
      * @return The signature-params value
      */
     private static String buildSignatureParams(SignatureInputParser parser) {
-        List<String> params = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
         
-        // Add components list
-        params.add("(" + String.join(" ", parser.getComponents()) + ")");
+        // Add components list with quoted component names
+        sb.append("(");
+        List<String> components = parser.getComponents();
+        for (int i = 0; i < components.size(); i++) {
+            if (i > 0) {
+                sb.append(" ");
+            }
+            sb.append("\"").append(components.get(i)).append("\"");
+        }
+        sb.append(")");
         
         // Add parameters (created, nonce, etc.)
         if (parser.getCreated() != null) {
-            params.add("created=" + parser.getCreated());
+            sb.append(";created=").append(parser.getCreated());
         }
         if (parser.getNonce() != null) {
-            params.add("nonce=" + parser.getNonce());
+            sb.append(";nonce=").append(parser.getNonce());
         }
         
-        return String.join(";", params);
+        return sb.toString();
     }
 
     /**

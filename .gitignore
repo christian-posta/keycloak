@@ -97,3 +97,4 @@ quarkus/data/*.db
 
 .env
 .env.test
+.mock_resource_key.pem
