@@ -7,11 +7,10 @@ This document provides step-by-step instructions for manually testing the AAuth 
 1. [Quick Start](#quick-start)
 2. [Prerequisites](#prerequisites)
 3. [Running Unit Tests](#running-unit-tests)
-4. [Setup](#setup)
-5. [Test Scenarios](#test-scenarios)
-6. [User Consent Flow](#user-consent-flow)
-7. [Code Exchange Flow](#code-exchange-flow)
-8. [Troubleshooting](#troubleshooting)
+4. [Test Scenarios](#test-scenarios)
+5. [User Consent Flow](#user-consent-flow)
+6. [Code Exchange Flow](#code-exchange-flow)
+7. [Troubleshooting](#troubleshooting)
 
 ## Quick Start
 
@@ -147,16 +146,6 @@ This will run:
 ./mvnw -pl services test -Dtest="*AAuth*" -DfailIfNoTests=false
 ```
 
-### Expected Test Results
-
-When tests pass successfully, you should see output like:
-
-```
-[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0
-[INFO] 
-[INFO] ------------------------------------------------------------------------
-[INFO] BUILD SUCCESS
-```
 
 ### Test Coverage
 
@@ -189,68 +178,6 @@ If tests fail:
    ```
 
 3. **Test Timeout**: Some tests may take longer on slower machines. Increase timeout if needed.
-
-## Setup
-
-### Step 1: Build Keycloak
-
-See [Phase 2 Manual Testing Guide](../AAUTH_PHASE2_MANUAL_TESTING.md#step-1-build-keycloak) for detailed build instructions.
-
-### Step 2: Start Keycloak
-
-```bash
-java -jar quarkus/server/target/lib/quarkus-run.jar start-dev \
-  --bootstrap-admin-username=admin \
-  --bootstrap-admin-password=admin
-```
-
-### Step 3: Create Test Realm
-
-```bash
-./scripts/create_realm.sh
-```
-
-### Step 4: Create Test User
-
-**Via Admin Console:**
-1. Navigate to `http://localhost:8080/admin`
-2. Select `aauth-test` realm
-3. Go to "Users" → "Add user"
-4. Fill in:
-   - Username: `test-user`
-   - Email: `test@example.com`
-   - Email Verified: ON
-5. Click "Create"
-6. Go to "Credentials" tab
-7. Set password: `password`
-8. Toggle "Temporary" OFF
-9. Click "Set Password"
-
-**Via Admin REST API:**
-```bash
-# Get admin token
-ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
-  -d "client_id=admin-cli" \
-  -d "username=admin" \
-  -d "password=admin" \
-  -d "grant_type=password" | jq -r '.access_token')
-
-# Create user
-curl -X POST http://localhost:8080/admin/realms/aauth-test/users \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "test-user",
-    "email": "test@example.com",
-    "enabled": true,
-    "emailVerified": true,
-    "credentials": [{
-      "type": "password",
-      "value": "password",
-      "temporary": false
-    }]
-  }'
-```
 
 ## Test Scenarios
 
@@ -578,17 +505,6 @@ request_type=code&code=abc123.session456.hash&redirect_uri=http://localhost:9000
 }
 ```
 
-### Validation Checks
-
-The auth server performs these validations during code exchange:
-
-1. **Code Format**: Code must be in format `{codeId}.{userSessionId}.{hash}`
-2. **Code Existence**: Code must exist in store and not be expired
-3. **Single-Use**: Code is removed from store after use
-4. **Agent Signature**: Current agent signature must match original request
-5. **Redirect URI**: Must match the redirect_uri from original request
-6. **User Session**: User session must still be valid
-
 ## Troubleshooting
 
 ### Issue: Request Token Not Returned
@@ -669,51 +585,6 @@ The auth server performs these validations during code exchange:
 - Ensure user is logged in to Keycloak
 - Check browser cookies
 - Try logging in again
-
-## Manual Testing with curl
-
-### Step 1: Generate Key Pair
-
-```bash
-# Generate Ed25519 key pair (requires OpenSSL 1.1.1+)
-openssl genpkey -algorithm Ed25519 -out private_key.pem
-openssl pkey -in private_key.pem -pubout -out public_key.pem
-
-# Extract public key in JWK format (requires Python)
-python3 << EOF
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-import base64
-import json
-
-with open('private_key.pem', 'rb') as f:
-    private_key = serialization.load_pem_private_key(f.read(), password=None)
-
-public_key = private_key.public_key()
-public_bytes = public_key.public_bytes_raw()
-x = base64.urlsafe_b64encode(public_bytes).decode().rstrip('=')
-
-jwk = {
-    "kty": "OKP",
-    "crv": "Ed25519",
-    "x": x
-}
-print(json.dumps(jwk, indent=2))
-EOF
-```
-
-### Step 2: Create Signed Request
-
-For manual testing with curl, you'll need to:
-1. Generate HTTP Message Signature (complex - use Python script instead)
-2. Include Signature-Key, Signature-Input, and Signature headers
-3. **Manage key pairs manually** - ensure the same key is used for both request token and code exchange
-
-**Recommendation**: Use the Python test client script (`scripts/aauth_test_client.py`) instead of curl for signed requests. The Python script:
-- Automatically generates and saves key pairs (`.aauth_test_key.pem`)
-- Handles HTTP Message Signing correctly
-- Reuses the same key pair across requests automatically
-- Provides verbose output for debugging
 
 ## Next Steps
 
