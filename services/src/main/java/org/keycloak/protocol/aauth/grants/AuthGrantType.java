@@ -23,6 +23,8 @@ import org.keycloak.events.EventType;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.protocol.aauth.AAuthTokenManager;
+import org.keycloak.protocol.aauth.policy.AAuthPolicyEvaluator;
+import org.keycloak.protocol.aauth.policy.DefaultAAuthPolicyEvaluator;
 import org.keycloak.protocol.aauth.storage.AAuthRequestTokenStore;
 import org.keycloak.protocol.aauth.tokens.ResourceTokenValidator;
 import org.keycloak.protocol.oidc.grants.OAuth2GrantType;
@@ -93,11 +95,32 @@ public class AuthGrantType implements OAuth2GrantType {
     private Response processGrant(KeycloakSession session, RealmModel realm, Cors cors,
             String agentId, PublicKey agentPublicKey, String signatureScheme, Context context) {
         
+        // Policy checks
+        AAuthPolicyEvaluator policyEvaluator = DefaultAAuthPolicyEvaluator.create(session);
+        
+        // Check if AAuth is enabled for this realm
+        if (!policyEvaluator.isProtocolEnabled(realm)) {
+            throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                    "AAuth protocol is not enabled for this realm", Response.Status.BAD_REQUEST);
+        }
+        
+        // Check if agent is allowed
+        if (!policyEvaluator.isAgentAllowed(agentId, realm)) {
+            throw new CorsErrorResponseException(cors, OAuthErrorException.ACCESS_DENIED,
+                    "Agent is not allowed by policy", Response.Status.FORBIDDEN);
+        }
+        
         String resourceToken = context.getFormParams().getFirst("resource_token");
         String scope = context.getFormParams().getFirst("scope");
         String authRequestUrl = context.getFormParams().getFirst("auth_request_url");
         String redirectUri = context.getFormParams().getFirst("redirect_uri");
         String state = context.getFormParams().getFirst("state");
+        
+        // Check if requested scopes are allowed
+        if (scope != null && !policyEvaluator.areScopesAllowed(scope, realm)) {
+            throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_SCOPE,
+                    "One or more requested scopes are not allowed", Response.Status.BAD_REQUEST);
+        }
 
         String resourceId;
         String grantedScope = null;
@@ -164,8 +187,8 @@ public class AuthGrantType implements OAuth2GrantType {
         }
 
         // Direct grant - no user consent needed
-        // Evaluate authorization policy (basic check)
-        if (!isAuthorized(realm, agentId, resourceId, grantedScope)) {
+        // Evaluate authorization policy
+        if (!isAuthorized(session, realm, agentId, resourceId, grantedScope)) {
             throw new CorsErrorResponseException(cors, OAuthErrorException.ACCESS_DENIED,
                     "Authorization denied", Response.Status.FORBIDDEN);
         }
@@ -218,12 +241,12 @@ public class AuthGrantType implements OAuth2GrantType {
     }
 
     /**
-     * Basic authorization check (Phase 2 - can be enhanced later).
+     * Authorization check using policy evaluator.
      */
-    private boolean isAuthorized(RealmModel realm, String agentId, String resourceId, String scope) {
-        // For Phase 2, allow all requests (no authorization policy yet)
-        // This will be enhanced in future phases with proper authorization policies
-        return true;
+    private boolean isAuthorized(KeycloakSession session, RealmModel realm, String agentId, 
+                                 String resourceId, String scope) {
+        AAuthPolicyEvaluator policyEvaluator = DefaultAAuthPolicyEvaluator.create(session);
+        return policyEvaluator.isAgentScopeAllowed(agentId, scope, realm);
     }
 
     @Override

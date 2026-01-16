@@ -52,6 +52,7 @@ import { ClientPoliciesTab, toClientPolicies } from "./routes/ClientPolicies";
 import { RealmSettingsTab, toRealmSettings } from "./routes/RealmSettings";
 import { SecurityDefenses } from "./security-defences/SecurityDefenses";
 import { UserProfileTab } from "./user-profile/UserProfileTab";
+import { AAuthTab } from "./aauth/AAuthTab";
 
 export interface UIRealmRepresentation extends RealmRepresentation {
   upConfig?: UserProfileConfig;
@@ -287,6 +288,7 @@ export const RealmSettingsTabs = () => {
   const clientPoliciesTab = useTab("client-policies");
   const userProfileTab = useTab("user-profile");
   const userRegistrationTab = useTab("user-registration");
+  const aauthTab = useTab("aauth");
   const { hasAccess, hasSomeAccess } = useAccess();
   const canViewOrManageEvents =
     hasAccess("view-realm") && hasSomeAccess("view-events", "manage-events");
@@ -463,6 +465,13 @@ export const RealmSettingsTabs = () => {
               <UserRegistration />
             </Tab>
           )}
+          <Tab
+            title={<TabTitleText>{t("aauth")}</TabTitleText>}
+            data-testid="rs-aauth-tab"
+            {...aauthTab}
+          >
+            <AAuthTab realm={realm!} save={save} />
+          </Tab>
         </RoutableTabs>
       </PageSection>
     </FormProvider>

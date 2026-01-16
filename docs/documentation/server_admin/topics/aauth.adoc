@@ -1,0 +1,12 @@
+[[_aauth]]
+= AAuth Protocol
+:toclevels: 3
+
+include::aauth/index.adoc[leveloffset=+1]
+
+include::aauth/configuration.adoc[leveloffset=+1]
+
+include::aauth/federation.adoc[leveloffset=+1]
+
+include::aauth/troubleshooting.adoc[leveloffset=+1]
+

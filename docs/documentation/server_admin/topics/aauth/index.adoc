@@ -1,0 +1,131 @@
+[[_aauth_protocol]]
+= AAuth Protocol
+
+AAuth is an authorization protocol designed for agent-based systems where software agents (AI assistants, automated services, etc.) request authorization to perform actions on behalf of users.
+
+== What is AAuth?
+
+AAuth (Agent Authorization) is a protocol that enables:
+
+* **Agent-based Authorization**: Software agents can request authorization tokens to access resources
+* **Multi-hop Delegation**: Tokens can be exchanged through chains of agents (A → B → C)
+* **Signature-based Identity**: Agents prove their identity using cryptographic signatures (HTTP Message Signatures RFC 9421)
+* **User Consent**: Optional user consent for sensitive operations
+
+== Key Concepts
+
+=== Agents
+An agent is a software entity (such as an AI assistant or automated service) that requests authorization to access resources. Agents are identified by their public keys or URLs.
+
+=== Authorization Tokens (auth_token)
+Authorization tokens are JWTs that grant an agent permission to access specific resources with defined scopes. Tokens contain:
+
+* Agent identity (`agent` claim)
+* Resource being accessed (`aud` claim)
+* Granted scopes (`scope` claim)
+* Confirmation key for proof-of-possession (`cnf.jwk` claim)
+
+=== Resource Tokens
+Resource tokens are issued by resource servers to request specific permissions from an authorization server.
+
+=== Token Exchange
+Agents can exchange upstream authorization tokens for new tokens with different or narrower scopes. This enables multi-hop delegation scenarios where Agent A gets a token, then Agent B can exchange that token for its own authorization.
+
+=== Actor Claims
+When tokens are exchanged, the delegation chain is preserved in `act` (actor) claims, allowing resources to see the full chain of agents involved in a request.
+
+== How AAuth Differs from OAuth/OIDC
+
+[cols="1,1,1"]
+|===
+|Feature |OAuth/OIDC |AAuth
+
+|Identity
+|Client credentials (client_id/secret)
+|Cryptographic signatures
+
+|Tokens
+|Bearer tokens
+|Proof-of-possession tokens
+
+|Delegation
+|Limited (token exchange)
+|First-class multi-hop delegation
+
+|Agent Focus
+|Human users primarily
+|Software agents primarily
+
+|Signature Binding
+|Optional (DPoP)
+|Required (HTTP Message Signatures)
+|===
+
+== Protocol Flows
+
+=== Direct Grant Flow
+
+[plantuml]
+----
+@startuml
+participant Agent
+participant "Auth Server" as AS
+participant Resource
+
+Agent -> AS: Token Request (HTTPSig signed)
+AS -> AS: Verify signature
+AS -> AS: Check policies
+AS --> Agent: auth_token
+
+Agent -> Resource: API Request + auth_token (HTTPSig signed)
+Resource -> Resource: Verify signatures
+Resource --> Agent: Response
+@enduml
+----
+
+=== Token Exchange Flow
+
+[plantuml]
+----
+@startuml
+participant "Agent A" as A
+participant "Agent B" as B
+participant "Auth Server" as AS
+participant "Resource" as R
+
+A -> AS: Request token for Resource
+AS --> A: auth_token_A
+
+A -> B: Request action (with auth_token_A)
+B -> AS: Exchange auth_token_A for auth_token_B
+AS -> AS: Validate upstream token
+AS -> AS: Check scope narrowing
+AS --> B: auth_token_B (with act claim)
+
+B -> R: API Request + auth_token_B
+R --> B: Response
+@enduml
+----
+
+== Use Cases
+
+1. **AI Assistants**: An AI assistant requests permission to access user data on their behalf
+2. **Automated Pipelines**: CI/CD systems that need scoped access to resources
+3. **Service Mesh**: Microservices delegating authorization through chains
+4. **Third-party Integrations**: External services requesting limited access to user resources
+
+== Getting Started
+
+To enable AAuth for your realm:
+
+1. Navigate to **Realm Settings** → **AAuth** tab
+2. Enable the AAuth protocol
+3. Configure agent policies and token settings
+4. Set up trusted issuers for cross-server token exchange (optional)
+
+See the following sections for detailed configuration:
+
+* <<configuration.adoc#_aauth_configuration,Configuration Guide>>
+* <<federation.adoc#_aauth_federation,Federation Setup>>
+* <<troubleshooting.adoc#_aauth_troubleshooting,Troubleshooting>>
+

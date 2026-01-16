@@ -24,6 +24,8 @@ import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.protocol.aauth.AAuthTokenManager;
+import org.keycloak.protocol.aauth.policy.AAuthPolicyEvaluator;
+import org.keycloak.protocol.aauth.policy.DefaultAAuthPolicyEvaluator;
 import org.keycloak.protocol.aauth.tokens.ResourceTokenValidator;
 import org.keycloak.representations.AAuthActorClaim;
 import org.keycloak.protocol.aauth.tokens.UpstreamAuthTokenValidator;
@@ -87,6 +89,8 @@ public class ExchangeGrantType implements OAuth2GrantType {
         // Extract agent identity from session (set by AAuthSignatureFilter)
         String agentId = (String) session.getAttribute("aauth.agent.id");
         PublicKey agentPublicKey = (PublicKey) session.getAttribute("aauth.agent.public.key");
+        // Note: signatureScheme stored for future use in enhanced policy checks
+        @SuppressWarnings("unused")
         String signatureScheme = (String) session.getAttribute("aauth.signature.scheme");
 
         if (agentPublicKey == null) {
@@ -117,31 +121,59 @@ public class ExchangeGrantType implements OAuth2GrantType {
     private Response processExchange(KeycloakSession session, RealmModel realm, Cors cors,
             String agentId, PublicKey agentPublicKey, String resourceToken, String upstreamAuthTokenString) {
 
+        // Policy checks
+        AAuthPolicyEvaluator policyEvaluator = DefaultAAuthPolicyEvaluator.create(session);
+        String authServerId = Urls.realmIssuer(session.getContext().getUri().getBaseUri(), realm.getName());
+        
+        // Check if AAuth is enabled for this realm
+        if (!policyEvaluator.isProtocolEnabled(realm)) {
+            throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                    "AAuth protocol is not enabled for this realm", Response.Status.BAD_REQUEST);
+        }
+        
+        // Check if token exchange is enabled
+        if (!policyEvaluator.isExchangeEnabled(realm)) {
+            throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                    "Token exchange is not enabled for this realm", Response.Status.BAD_REQUEST);
+        }
+        
+        // Check if agent is allowed
+        if (!policyEvaluator.isAgentAllowed(agentId, realm)) {
+            throw new CorsErrorResponseException(cors, OAuthErrorException.ACCESS_DENIED,
+                    "Agent is not allowed by policy", Response.Status.FORBIDDEN);
+        }
+
         AAuthTokenManager tokenManager = new AAuthTokenManager(session);
         String agentJkt = tokenManager.calculateAgentJkt(agentPublicKey);
-        String authServerId = Urls.realmIssuer(session.getContext().getUri().getBaseUri(), realm.getName());
 
         try {
             // 1. Validate upstream auth token
             UpstreamAuthTokenValidator upstreamValidator = new UpstreamAuthTokenValidator(session, realm);
             UpstreamAuthTokenValidator.UpstreamTokenValidationResult upstreamResult = 
                     upstreamValidator.validate(upstreamAuthTokenString);
+            
+            // 2. Check if upstream issuer is trusted
+            String upstreamIssuer = upstreamResult.getToken().getIssuer();
+            if (!policyEvaluator.isIssuerTrusted(upstreamIssuer, authServerId, realm)) {
+                throw new CorsErrorResponseException(cors, OAuthErrorException.ACCESS_DENIED,
+                        "Upstream issuer is not trusted", Response.Status.FORBIDDEN);
+            }
 
-            // 2. Validate resource token
+            // 3. Validate resource token
             ResourceTokenValidator resourceValidator = new ResourceTokenValidator(session, authServerId);
             ResourceTokenValidator.ResourceTokenValidationResult resourceResult = 
                     resourceValidator.validate(resourceToken, agentId, agentJkt);
 
-            // 3. Authorize exchange (scope narrowing, delegation chain validation)
+            // 4. Authorize exchange (scope narrowing, delegation chain validation)
             authorizeExchange(upstreamResult, resourceResult);
 
-            // 4. Build actor claim from upstream token
+            // 5. Build actor claim from upstream token
             AAuthActorClaim actorClaim = buildActorClaim(upstreamResult);
 
-            // 5. Validate delegation chain (prevent circular delegation)
-            validateDelegationChain(actorClaim, realm);
+            // 6. Validate delegation chain (prevent circular delegation)
+            validateDelegationChain(actorClaim, realm, policyEvaluator);
 
-            // 6. Get user model if upstream token has subject
+            // 7. Get user model if upstream token has subject
             UserModel user = null;
             if (upstreamResult.getSub() != null) {
                 // Try to find user by subject ID
@@ -149,13 +181,13 @@ public class ExchangeGrantType implements OAuth2GrantType {
                 user = session.users().getUserById(realm, upstreamResult.getSub());
             }
 
-            // 7. Generate new auth token with actor claim
+            // 8. Generate new auth token with actor claim
             String newAuthToken = tokenManager.createAuthTokenWithActor(
                     realm, agentId, null, // No agent_delegate for exchange
                     agentPublicKey, resourceResult.getResourceId(), resourceResult.getScope(),
                     user, actorClaim);
 
-            // 8. Create response
+            // 9. Create response
             AAuthTokenResponse response = new AAuthTokenResponse();
             response.setAuthToken(newAuthToken);
             response.setExpiresIn(tokenManager.getTokenExpiration(realm));
@@ -251,13 +283,16 @@ public class ExchangeGrantType implements OAuth2GrantType {
      * Checks that the delegation chain depth is within limits.
      * Note: Full circular delegation detection would require fetching upstream issuer metadata.
      */
-    private void validateDelegationChain(AAuthActorClaim actorClaim, RealmModel realm) {
+    private void validateDelegationChain(AAuthActorClaim actorClaim, RealmModel realm, 
+                                         AAuthPolicyEvaluator policyEvaluator) {
+        // Get max depth from policy
+        int maxDepth = policyEvaluator.getMaxDelegationDepth(realm);
+        
         // Check delegation chain depth
         AAuthActorClaim current = actorClaim;
         int depth = 0;
-        int maxDepth = 10; // Prevent infinite loops
 
-        while (current != null && depth < maxDepth) {
+        while (current != null && depth <= maxDepth) {
             // Check nested act claim
             if (current.getAct() != null) {
                 current = current.getAct();
@@ -267,8 +302,8 @@ public class ExchangeGrantType implements OAuth2GrantType {
             }
         }
 
-        if (depth >= maxDepth) {
-            throw new IllegalArgumentException("Delegation chain depth limit exceeded");
+        if (depth > maxDepth) {
+            throw new IllegalArgumentException("Delegation chain depth limit exceeded (max: " + maxDepth + ")");
         }
     }
 

@@ -24,6 +24,8 @@ import org.keycloak.events.EventType;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.protocol.aauth.AAuthTokenManager;
+import org.keycloak.protocol.aauth.policy.AAuthPolicyEvaluator;
+import org.keycloak.protocol.aauth.policy.DefaultAAuthPolicyEvaluator;
 import org.keycloak.protocol.oidc.grants.OAuth2GrantType;
 import org.keycloak.representations.AAuthRefreshToken;
 import org.keycloak.representations.AAuthTokenResponse;
@@ -95,6 +97,21 @@ public class RefreshGrantType implements OAuth2GrantType {
 
     private Response processRefresh(KeycloakSession session, RealmModel realm, Cors cors,
             String agentId, PublicKey agentPublicKey, String refreshTokenString) {
+
+        // Policy checks
+        AAuthPolicyEvaluator policyEvaluator = DefaultAAuthPolicyEvaluator.create(session);
+        
+        // Check if AAuth is enabled for this realm
+        if (!policyEvaluator.isProtocolEnabled(realm)) {
+            throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                    "AAuth protocol is not enabled for this realm", Response.Status.BAD_REQUEST);
+        }
+        
+        // Check if agent is allowed
+        if (!policyEvaluator.isAgentAllowed(agentId, realm)) {
+            throw new CorsErrorResponseException(cors, OAuthErrorException.ACCESS_DENIED,
+                    "Agent is not allowed by policy", Response.Status.FORBIDDEN);
+        }
 
         AAuthTokenManager tokenManager = new AAuthTokenManager(session);
 

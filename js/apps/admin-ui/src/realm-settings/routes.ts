@@ -1,4 +1,5 @@
 import type { AppRouteObject } from "../routes";
+import { AAuthRoute } from "./routes/AAuth";
 import { AddAttributeRoute } from "./routes/AddAttribute";
 import { AddClientPolicyRoute } from "./routes/AddClientPolicy";
 import { AddClientProfileRoute } from "./routes/AddClientProfile";
@@ -24,6 +25,7 @@ import { UserProfileRoute } from "./routes/UserProfile";
 const routes: AppRouteObject[] = [
   RealmSettingsRoute,
   RealmSettingsRouteWithTab,
+  AAuthRoute,
   KeysRoute,
   KeyProviderFormRoute,
   ClientPoliciesRoute,

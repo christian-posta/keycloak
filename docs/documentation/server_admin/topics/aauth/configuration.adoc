@@ -1,0 +1,182 @@
+[[_aauth_configuration]]
+= AAuth Configuration Guide
+
+This guide explains how to configure the AAuth protocol for your {project_name} realm.
+
+== Accessing AAuth Settings
+
+1. Log in to the Admin Console
+2. Select your realm
+3. Navigate to **Realm Settings** in the left menu
+4. Click on the **AAuth** tab
+
+The AAuth configuration is organized into four sub-tabs:
+
+* General Settings
+* Trusted Issuers
+* Agent Policies
+* Token Settings
+
+== General Settings
+
+=== Enable AAuth Protocol
+
+Toggle the **Enable AAuth Protocol** switch to enable or disable the AAuth protocol for this realm.
+
+When enabled, the following endpoints become available:
+
+* **Well-Known Endpoint**: `{server-url}/realms/{realm}/.well-known/aauth-configuration`
+* **Token Endpoint**: `{server-url}/realms/{realm}/protocol/aauth/token`
+
+NOTE: The well-known endpoint provides metadata for agents to discover AAuth capabilities and endpoints.
+
+== Trusted Issuers
+
+Trusted issuers are authorization servers that this realm trusts for token exchange. This enables federated scenarios where tokens issued by one server can be exchanged at another.
+
+=== Adding a Trusted Issuer
+
+1. Navigate to **AAuth** → **Trusted Issuers**
+2. Enter the issuer URL in the text field (e.g., `https://other-server.example.com/realms/other-realm`)
+3. Click **Add**
+
+=== Removing a Trusted Issuer
+
+1. Locate the issuer in the list
+2. Click the trash icon to remove it
+
+WARNING: Removing a trusted issuer will immediately prevent token exchange from that issuer.
+
+=== Same-Server Exchange
+
+Token exchange within the same realm is always allowed and does not require explicit trust configuration. Only configure trusted issuers when you need cross-server federation.
+
+== Agent Policies
+
+Agent policies control which agents can request tokens from this realm.
+
+=== Policy Modes
+
+[cols="1,2"]
+|===
+|Mode |Description
+
+|**Allow All Agents**
+|Any agent can request tokens (default)
+
+|**Allowlist**
+|Only agents in the allowlist can request tokens
+
+|**Blocklist**
+|All agents except those in the blocklist can request tokens
+|===
+
+=== Configuring Agent Lists
+
+1. Select the desired policy mode
+2. For allowlist/blocklist mode, add agent URLs:
+   * Click in the text field
+   * Enter the agent URL (e.g., `https://agent.example.com`)
+   * Click **Add**
+3. Click **Save**
+
+=== Scope Restrictions
+
+You can also restrict which scopes agents can request:
+
+1. In the **Allowed Scopes** section, add scopes that agents are permitted to request
+2. Leave empty to allow all scopes
+3. Click **Save**
+
+NOTE: Scope restrictions apply to all agents. Per-agent scope restrictions may be added in future versions.
+
+== Token Settings
+
+=== Auth Token Lifespan
+
+The lifespan of AAuth authorization tokens in seconds. Default: 300 (5 minutes).
+
+Recommended values:
+* Short-lived operations: 60-300 seconds
+* Long-running tasks: 300-900 seconds
+
+=== Refresh Token Lifespan
+
+The lifespan of refresh tokens in seconds. Default: 1800 (30 minutes).
+
+Agents can use refresh tokens to obtain new auth tokens without re-authenticating.
+
+=== Enable Token Exchange
+
+Toggle to enable or disable token exchange for this realm. When disabled, agents cannot exchange upstream tokens.
+
+=== Max Delegation Depth
+
+The maximum depth of the delegation chain in token exchanges. Default: 10.
+
+This prevents infinite loops in complex delegation scenarios. Each token exchange increments the delegation depth by 1.
+
+Example: A → B → C → D would have depth 3.
+
+== Configuration via Realm Attributes
+
+AAuth settings can also be configured programmatically via realm attributes:
+
+[cols="2,1,2"]
+|===
+|Attribute |Type |Description
+
+|`aauth.enabled`
+|boolean
+|Enable AAuth protocol
+
+|`aauth.trusted.issuers`
+|JSON array
+|Trusted issuer URLs
+
+|`aauth.allowed.agents`
+|JSON array
+|Allowed agent URLs (allowlist)
+
+|`aauth.blocked.agents`
+|JSON array
+|Blocked agent URLs (blocklist)
+
+|`aauth.allowed.scopes`
+|JSON array
+|Allowed scope names
+
+|`aauth.token.lifespan`
+|integer
+|Auth token lifespan (seconds)
+
+|`aauth.refresh.lifespan`
+|integer
+|Refresh token lifespan (seconds)
+
+|`aauth.exchange.enabled`
+|boolean
+|Enable token exchange
+
+|`aauth.exchange.max.depth`
+|integer
+|Max delegation depth
+|===
+
+Example using Admin CLI:
+
+[source,bash]
+----
+./kcadm.sh update realms/my-realm -s 'attributes."aauth.enabled"=true'
+./kcadm.sh update realms/my-realm -s 'attributes."aauth.trusted.issuers"=["https://trusted.example.com"]'
+./kcadm.sh update realms/my-realm -s 'attributes."aauth.allowed.agents"=["https://agent1.example.com","https://agent2.example.com"]'
+----
+
+== Security Considerations
+
+1. **Minimize Token Lifespan**: Use the shortest practical lifespan for tokens
+2. **Restrict Scopes**: Only allow necessary scopes for agents
+3. **Use Allowlists in Production**: Consider using allowlists instead of allowing all agents
+4. **Monitor Token Exchange**: Keep track of delegation chains to detect abuse
+5. **Trust Minimization**: Only trust issuers that you have verified
+
