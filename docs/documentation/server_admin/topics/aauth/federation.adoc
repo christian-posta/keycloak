@@ -1,9 +1,9 @@
-[[_aauth_federation]]
-= AAuth Federation Setup
+[id="aauth-federation_{context}"]
+=== AAuth Federation Setup
 
 This guide explains how to configure cross-server token exchange (federation) in AAuth.
 
-== When to Use Federation
+==== When to Use Federation
 
 Federation allows tokens issued by one authorization server to be exchanged at another. Use cases include:
 
@@ -11,59 +11,48 @@ Federation allows tokens issued by one authorization server to be exchanged at a
 * **Partner Integration**: Trusting tokens from partner organizations
 * **Gradual Migration**: Moving between authorization servers while maintaining access
 
-== How Federation Works
+==== How Federation Works
 
-[plantuml]
-----
-@startuml
-participant Agent
-participant "Auth Server A" as AS_A
-participant "Auth Server B" as AS_B
-participant Resource
+The federation flow involves the following steps:
 
-Agent -> AS_A: Request token
-AS_A --> Agent: auth_token (issuer: AS_A)
+. Agent requests a token from Auth Server A
+. Auth Server A issues an `auth_token` with itself as the issuer
+. Agent sends a token exchange request to Auth Server B with the upstream token and a resource token
+. Auth Server B fetches the `.well-known/aauth-configuration` from Auth Server A
+. Auth Server B fetches the JWKS from Auth Server A
+. Auth Server B validates the `auth_token` signature using the fetched JWKS
+. Auth Server B issues a new `auth_token` (issuer: Server B) with an `act` claim showing the delegation chain
+. Agent uses the new token to access resources
 
-Agent -> AS_B: Exchange token (resource_token + auth_token)
-AS_B -> AS_A: Fetch .well-known/aauth-configuration
-AS_B -> AS_A: Fetch JWKS
-AS_B -> AS_B: Validate auth_token signature
-AS_B --> Agent: new auth_token (issuer: AS_B, act: AS_A info)
-
-Agent -> Resource: Request with new token
-Resource --> Agent: Response
-@enduml
-----
-
-== Prerequisites
+==== Prerequisites
 
 Before configuring federation:
 
-1. Both authorization servers must be running {project_name} with AAuth enabled
-2. Network connectivity between servers (for metadata/JWKS fetching)
-3. HTTPS recommended for production deployments
+. Both authorization servers must be running {project_name} with AAuth enabled
+. Network connectivity between servers (for metadata/JWKS fetching)
+. HTTPS recommended for production deployments
 
-== Configuration Steps
+==== Configuration Steps
 
-=== Step 1: Enable AAuth on Both Servers
+===== Step 1: Enable AAuth on Both Servers
 
 Ensure AAuth is enabled on both the trusting server and the trusted server:
 
-1. Navigate to **Realm Settings** → **AAuth** → **General**
-2. Enable the AAuth protocol
-3. Verify the well-known endpoint is accessible
+. Navigate to **Realm Settings** → **AAuth** → **General**
+. Enable the AAuth protocol
+. Verify the well-known endpoint is accessible
 
-=== Step 2: Add Trusted Issuer
+===== Step 2: Add Trusted Issuer
 
 On the trusting server (Server B):
 
-1. Navigate to **Realm Settings** → **AAuth** → **Trusted Issuers**
-2. Add the issuer URL of Server A
+. Navigate to **Realm Settings** → **AAuth** → **Trusted Issuers**
+. Add the issuer URL of Server A
    * Format: `https://server-a.example.com/realms/{realm-name}`
-3. Click **Add**
-4. Click **Save**
+. Click **Add**
+. Click **Save**
 
-=== Step 3: Verify Connectivity
+===== Step 3: Verify Connectivity
 
 Test that the trusting server can reach the trusted server's metadata:
 
@@ -85,10 +74,10 @@ The response should include:
 }
 ----
 
-=== Step 4: Test Token Exchange
+===== Step 4: Test Token Exchange
 
-1. Obtain a token from Server A
-2. Exchange it at Server B:
+. Obtain a token from Server A
+. Exchange it at Server B:
 
 [source,bash]
 ----
@@ -103,73 +92,75 @@ Signature: sig=<signature_bytes>
 request_type=exchange&resource_token=<resource_token>
 ----
 
-== Trust Considerations
+==== Trust Considerations
 
-=== One-Way vs Two-Way Trust
+===== One-Way vs Two-Way Trust
 
 * **One-Way Trust**: Server B trusts Server A, but not vice versa
 * **Two-Way Trust**: Both servers trust each other (configure on both sides)
 
-=== Trust Verification
+===== Trust Verification
 
 Before adding a trusted issuer, verify:
 
-1. The server is legitimate and under your control or a trusted partner's
-2. The HTTPS certificate is valid
-3. Agent policies on the trusted server are appropriate
+. The server is legitimate and under your control or a trusted partner's
+. The HTTPS certificate is valid
+. Agent policies on the trusted server are appropriate
 
-=== Revoking Trust
+===== Revoking Trust
 
 To revoke trust:
 
-1. Navigate to **Trusted Issuers** on the trusting server
-2. Remove the issuer URL
-3. Click **Save**
+. Navigate to **Trusted Issuers** on the trusting server
+. Remove the issuer URL
+. Click **Save**
 
 WARNING: Revoking trust immediately prevents new token exchanges. Existing tokens remain valid until expiration.
 
-== Troubleshooting Federation
+==== Troubleshooting Federation
 
-=== Token Exchange Fails with "Issuer not trusted"
+===== Token Exchange Fails with "Issuer not trusted"
 
 **Cause**: The upstream token's issuer is not in the trusted issuers list.
 
 **Solution**:
-1. Verify the issuer URL matches exactly (including path and protocol)
-2. Check the trusted issuers configuration
 
-=== Token Exchange Fails with "Failed to fetch metadata"
+. Verify the issuer URL matches exactly (including path and protocol)
+. Check the trusted issuers configuration
+
+===== Token Exchange Fails with "Failed to fetch metadata"
 
 **Cause**: Cannot reach the trusted server's well-known endpoint.
 
 **Solution**:
-1. Verify network connectivity
-2. Check firewall rules
-3. Ensure HTTPS certificates are valid
-4. Test with curl from the trusting server
 
-=== Token Exchange Fails with "JWKS key not found"
+. Verify network connectivity
+. Check firewall rules
+. Ensure HTTPS certificates are valid
+. Test with curl from the trusting server
+
+===== Token Exchange Fails with "JWKS key not found"
 
 **Cause**: The signing key from the upstream token is not in the trusted server's JWKS.
 
 **Solution**:
-1. The trusted server may have rotated keys
-2. Wait for JWKS cache to refresh (default: few minutes)
-3. Check key rotation settings on the trusted server
 
-== Best Practices
+. The trusted server may have rotated keys
+. Wait for JWKS cache to refresh (default: few minutes)
+. Check key rotation settings on the trusted server
 
-1. **Use HTTPS**: Always use HTTPS for production federation
-2. **Minimal Trust**: Only trust necessary issuers
-3. **Monitor Exchanges**: Log and monitor cross-server exchanges
-4. **Key Rotation Coordination**: Coordinate key rotation between federated servers
-5. **Network Security**: Restrict network access between servers where possible
-6. **Regular Review**: Periodically review trusted issuer lists
+==== Best Practices
 
-== Limitations
+. **Use HTTPS**: Always use HTTPS for production federation
+. **Minimal Trust**: Only trust necessary issuers
+. **Monitor Exchanges**: Log and monitor cross-server exchanges
+. **Key Rotation Coordination**: Coordinate key rotation between federated servers
+. **Network Security**: Restrict network access between servers where possible
+. **Regular Review**: Periodically review trusted issuer lists
+
+==== Limitations
 
 * Federation requires network connectivity at exchange time
 * Key rotation on trusted servers may cause temporary exchange failures
 * Each hop in a federation chain adds latency
 * Maximum delegation depth limits complex federation scenarios
-

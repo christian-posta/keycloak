@@ -1,11 +1,11 @@
-[[_aauth_troubleshooting]]
-= AAuth Troubleshooting
+[id="aauth-troubleshooting_{context}"]
+=== AAuth Troubleshooting
 
 This guide helps diagnose and resolve common issues with the AAuth protocol.
 
-== Common Errors
+==== Common Errors
 
-=== "Agent identity not found"
+===== "Agent identity not found"
 
 [source,json]
 ----
@@ -18,14 +18,15 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 **Cause**: The request is missing HTTP Message Signature headers.
 
 **Solution**:
-1. Ensure your agent includes the required headers:
+
+. Ensure your agent includes the required headers:
    * `Signature-Key`: Contains the key identifier and scheme
    * `Signature-Input`: Specifies signed components and parameters
    * `Signature`: The actual signature bytes (base64url encoded)
-2. Verify the signature is being computed correctly
-3. Check that all required components are included in the signature
+. Verify the signature is being computed correctly
+. Check that all required components are included in the signature
 
-=== "Agent is not allowed by policy"
+===== "Agent is not allowed by policy"
 
 [source,json]
 ----
@@ -38,12 +39,13 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 **Cause**: The agent is blocked by agent policies.
 
 **Solution**:
-1. Check the Agent Policies configuration in the Admin Console
-2. If using allowlist mode, add the agent URL to the allowed agents list
-3. If using blocklist mode, remove the agent from the blocked list
-4. Verify the agent identifier matches exactly (URL comparison is case-sensitive)
 
-=== "One or more requested scopes are not allowed"
+. Check the Agent Policies configuration in the Admin Console
+. If using allowlist mode, add the agent URL to the allowed agents list
+. If using blocklist mode, remove the agent from the blocked list
+. Verify the agent identifier matches exactly (URL comparison is case-sensitive)
+
+===== "One or more requested scopes are not allowed"
 
 [source,json]
 ----
@@ -56,12 +58,13 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 **Cause**: The agent requested a scope not in the allowed scopes list.
 
 **Solution**:
-1. Check the Allowed Scopes configuration
-2. Add the required scope to the allowed list, or
-3. Remove the scope from your request if not needed
-4. Leave allowed scopes empty to allow all scopes
 
-=== "AAuth protocol is not enabled"
+. Check the Allowed Scopes configuration
+. Add the required scope to the allowed list, or
+. Remove the scope from your request if not needed
+. Leave allowed scopes empty to allow all scopes
+
+===== "AAuth protocol is not enabled"
 
 [source,json]
 ----
@@ -74,11 +77,12 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 **Cause**: AAuth is disabled for this realm.
 
 **Solution**:
-1. Navigate to **Realm Settings** → **AAuth** → **General**
-2. Enable the AAuth protocol
-3. Save the changes
 
-=== "Token exchange is not enabled"
+. Navigate to **Realm Settings** → **AAuth** → **General**
+. Enable the AAuth protocol
+. Save the changes
+
+===== "Token exchange is not enabled"
 
 [source,json]
 ----
@@ -91,11 +95,12 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 **Cause**: Token exchange is disabled.
 
 **Solution**:
-1. Navigate to **Realm Settings** → **AAuth** → **Token Settings**
-2. Enable the **Token Exchange** toggle
-3. Save the changes
 
-=== "Upstream issuer is not trusted"
+. Navigate to **Realm Settings** → **AAuth** → **Token Settings**
+. Enable the **Token Exchange** toggle
+. Save the changes
+
+===== "Upstream issuer is not trusted"
 
 [source,json]
 ----
@@ -108,11 +113,12 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 **Cause**: The upstream token's issuer is not in the trusted issuers list.
 
 **Solution**:
-1. Navigate to **Realm Settings** → **AAuth** → **Trusted Issuers**
-2. Add the upstream issuer URL
-3. Verify the URL matches exactly (including protocol and path)
 
-=== "Delegation chain depth limit exceeded"
+. Navigate to **Realm Settings** → **AAuth** → **Trusted Issuers**
+. Add the upstream issuer URL
+. Verify the URL matches exactly (including protocol and path)
+
+===== "Delegation chain depth limit exceeded"
 
 [source,json]
 ----
@@ -125,11 +131,12 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 **Cause**: The token exchange would create a delegation chain deeper than allowed.
 
 **Solution**:
-1. Reduce the number of hops in your delegation chain
-2. Increase the max delegation depth in Token Settings (if appropriate)
-3. Reconsider your architecture to reduce delegation depth
 
-=== "Auth token has expired"
+. Reduce the number of hops in your delegation chain
+. Increase the max delegation depth in Token Settings (if appropriate)
+. Reconsider your architecture to reduce delegation depth
+
+===== "Auth token has expired"
 
 [source,json]
 ----
@@ -142,15 +149,16 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 **Cause**: The token being used has passed its expiration time.
 
 **Solution**:
-1. Obtain a fresh token
-2. Use the refresh token to get a new auth token
-3. Consider increasing token lifespan if this happens frequently
 
-== Debug Logging
+. Obtain a fresh token
+. Use the refresh token to get a new auth token
+. Consider increasing token lifespan if this happens frequently
+
+==== Debug Logging
 
 Enable debug logging to get more information about AAuth processing:
 
-=== Using CLI
+===== Using CLI
 
 [source,bash]
 ----
@@ -158,7 +166,7 @@ Enable debug logging to get more information about AAuth processing:
 ./kc.sh start --log-level=org.keycloak.protocol.aauth:DEBUG
 ----
 
-=== Using Configuration File
+===== Using Configuration File
 
 In `keycloak.conf`:
 
@@ -167,7 +175,7 @@ In `keycloak.conf`:
 quarkus.log.category."org.keycloak.protocol.aauth".level=DEBUG
 ----
 
-=== Log Categories
+===== Log Categories
 
 [cols="1,2"]
 |===
@@ -189,9 +197,9 @@ quarkus.log.category."org.keycloak.protocol.aauth".level=DEBUG
 |Request filtering
 |===
 
-== Verifying Configuration
+==== Verifying Configuration
 
-=== Check Well-Known Endpoint
+===== Check Well-Known Endpoint
 
 [source,bash]
 ----
@@ -199,6 +207,7 @@ curl -s https://your-server/realms/your-realm/.well-known/aauth-configuration | 
 ----
 
 Expected response:
+
 [source,json]
 ----
 {
@@ -210,7 +219,7 @@ Expected response:
 }
 ----
 
-=== Check Realm Attributes
+===== Check Realm Attributes
 
 Using Admin CLI:
 
@@ -219,24 +228,25 @@ Using Admin CLI:
 ./kcadm.sh get realms/your-realm --fields 'attributes(aauth.*)'
 ----
 
-=== Verify JWKS
+===== Verify JWKS
 
 [source,bash]
 ----
 curl -s https://your-server/realms/your-realm/protocol/aauth/certs | jq
 ----
 
-== Testing Signatures
+==== Testing Signatures
 
-=== Validate Signature Base String
+===== Validate Signature Base String
 
 Common signature issues:
 
-1. **Component ordering**: Components must be in the order specified in `Signature-Input`
-2. **Quoting**: Component names must be quoted in `@signature-params`
-3. **Line endings**: Use LF (`\n`) not CRLF
+. **Component ordering**: Components must be in the order specified in `Signature-Input`
+. **Quoting**: Component names must be quoted in `@signature-params`
+. **Line endings**: Use LF (`\n`) not CRLF
 
 Example correct signature base:
+
 [source]
 ----
 "@method": POST
@@ -247,35 +257,35 @@ Example correct signature base:
 "@signature-params": ("@method" "@authority" "@path" "content-type" "signature-key");created=1705123456
 ----
 
-=== Verify Key Format
+===== Verify Key Format
 
 Ensure your keys are in the correct format:
+
 * Ed25519: Raw 32-byte public key
 * RSA: Standard RSA public key format
 
-== Performance Considerations
+==== Performance Considerations
 
-=== JWKS Caching
+===== JWKS Caching
 
 {project_name} caches JWKS responses. If you see stale key errors:
 
-1. Wait for cache expiration (typically a few minutes)
-2. Restart the server to clear cache (development only)
+. Wait for cache expiration (typically a few minutes)
+. Restart the server to clear cache (development only)
 
-=== Metadata Fetching
+===== Metadata Fetching
 
 For cross-server exchange, metadata is fetched on each request. Consider:
 
-1. Network latency to trusted servers
-2. Availability of trusted servers
-3. Using local servers when possible
+. Network latency to trusted servers
+. Availability of trusted servers
+. Using local servers when possible
 
-== Getting Help
+==== Getting Help
 
 If you cannot resolve your issue:
 
-1. Enable debug logging and collect logs
-2. Capture the exact request/response (redact sensitive data)
-3. Document your configuration
-4. Check for known issues in the project issue tracker
-
+. Enable debug logging and collect logs
+. Capture the exact request/response (redact sensitive data)
+. Document your configuration
+. Check for known issues in the project issue tracker

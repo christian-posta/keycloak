@@ -1,12 +1,11 @@
-[[_aauth]]
-= AAuth Protocol
-:toclevels: 3
+[id="aauth-protocol_{context}"]
+== AAuth Protocol
 
-include::aauth/index.adoc[leveloffset=+1]
+include::aauth/index.adoc[]
 
-include::aauth/configuration.adoc[leveloffset=+1]
+include::aauth/configuration.adoc[]
 
-include::aauth/federation.adoc[leveloffset=+1]
+include::aauth/federation.adoc[]
 
-include::aauth/troubleshooting.adoc[leveloffset=+1]
+include::aauth/troubleshooting.adoc[]
 
