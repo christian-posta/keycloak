@@ -83,8 +83,8 @@ public class AAuthIssuerWellKnownProvider implements WellKnownProvider {
         // Set supported signing algorithms (from realm key providers)
         metadata.setAgentSigningAlgsSupported(getSupportedSigningAlgorithms(realm));
 
-        // Set supported request types (Phase 2: only "auth")
-        metadata.setRequestTypesSupported(Arrays.asList("auth"));
+        // Set supported request types
+        metadata.setRequestTypesSupported(Arrays.asList("auth", "code", "refresh", "exchange"));
 
         // Set supported scopes (optional - can be enhanced later)
         metadata.setScopesSupported(getSupportedScopes(realm));
