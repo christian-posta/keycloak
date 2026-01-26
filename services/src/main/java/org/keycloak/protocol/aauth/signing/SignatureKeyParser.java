@@ -20,7 +20,9 @@ package org.keycloak.protocol.aauth.signing;
 import org.jboss.logging.Logger;
 import org.keycloak.protocol.aauth.signing.exceptions.SignatureKeyParseException;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -42,6 +44,10 @@ public class SignatureKeyParser {
     /**
      * Parse a Signature-Key header value.
      * 
+     * Supports two RFC 8941 formats:
+     * 1. Semicolon-separated: sig=jwks;id="...";kid="..."
+     * 2. Parenthesized inner-list: sig=(scheme=jwks id="..." kid="...")
+     * 
      * @param signatureKeyHeader The Signature-Key header value
      * @throws SignatureKeyParseException If the header cannot be parsed
      */
@@ -50,9 +56,6 @@ public class SignatureKeyParser {
             throw new SignatureKeyParseException("Signature-Key header is missing or empty");
         }
 
-        // Parse structured field dictionary format: label=value;param1="val1";param2=val2
-        // The dictionary MUST contain exactly one member per AAuth spec
-        
         String trimmed = signatureKeyHeader.trim();
         int equalsIndex = trimmed.indexOf('=');
         if (equalsIndex <= 0) {
@@ -63,36 +66,175 @@ public class SignatureKeyParser {
         this.signatureLabel = trimmed.substring(0, equalsIndex).trim();
         
         // Extract value and parameters
-        String valueAndParams = trimmed.substring(equalsIndex + 1);
-        String[] parts = valueAndParams.split(";", -1);
+        String valueAndParams = trimmed.substring(equalsIndex + 1).trim();
         
-        if (parts.length == 0) {
-            throw new SignatureKeyParseException("Invalid Signature-Key format: missing value");
-        }
+        // Check if it's parenthesized format: sig=(scheme=jwks id="..." kid="...")
+        if (valueAndParams.startsWith("(")) {
+            // Find matching closing parenthesis, handling quoted strings
+            int closingParen = findMatchingClosingParen(valueAndParams, 0);
+            if (closingParen < 0) {
+                throw new SignatureKeyParseException("Invalid Signature-Key format: unmatched opening parenthesis");
+            }
+            
+            // Extract content inside parentheses
+            String innerContent = valueAndParams.substring(1, closingParen).trim();
+            
+            // Parse space-separated parameters: scheme=jwks id="..." kid="..."
+            this.parameters = new HashMap<>();
+            String[] paramParts = parseSpaceSeparatedParams(innerContent);
+            
+            // Extract scheme from first parameter (scheme=jwks)
+            String schemeParam = paramParts.length > 0 ? paramParts[0] : null;
+            if (schemeParam == null || !schemeParam.startsWith("scheme=")) {
+                throw new SignatureKeyParseException("Invalid Signature-Key format: missing scheme parameter in parenthesized format");
+            }
+            this.scheme = parseValue(schemeParam.substring(7).trim()); // Extract value after "scheme="
+            
+            // Parse remaining parameters
+            for (int i = 1; i < paramParts.length; i++) {
+                String param = paramParts[i].trim();
+                if (param.isEmpty()) {
+                    continue;
+                }
+                
+                int paramEquals = param.indexOf('=');
+                if (paramEquals <= 0) {
+                    throw new SignatureKeyParseException("Invalid parameter format: " + param);
+                }
+                
+                String paramName = param.substring(0, paramEquals).trim();
+                String paramValue = parseValue(param.substring(paramEquals + 1).trim());
+                parameters.put(paramName, paramValue);
+            }
+        } else {
+            // Standard semicolon-separated format: sig=jwks;id="...";kid="..."
+            String[] parts = valueAndParams.split(";", -1);
+            
+            if (parts.length == 0) {
+                throw new SignatureKeyParseException("Invalid Signature-Key format: missing value");
+            }
 
-        // First part is the scheme value (hwk, jwks, x509, jwt)
-        this.scheme = parseValue(parts[0].trim());
-        
-        // Remaining parts are parameters
-        this.parameters = new HashMap<>();
-        for (int i = 1; i < parts.length; i++) {
-            String param = parts[i].trim();
-            if (param.isEmpty()) {
-                continue;
-            }
+            // First part is the scheme value (hwk, jwks, x509, jwt)
+            this.scheme = parseValue(parts[0].trim());
             
-            int paramEquals = param.indexOf('=');
-            if (paramEquals <= 0) {
-                throw new SignatureKeyParseException("Invalid parameter format: " + param);
+            // Remaining parts are parameters
+            this.parameters = new HashMap<>();
+            for (int i = 1; i < parts.length; i++) {
+                String param = parts[i].trim();
+                if (param.isEmpty()) {
+                    continue;
+                }
+                
+                int paramEquals = param.indexOf('=');
+                if (paramEquals <= 0) {
+                    throw new SignatureKeyParseException("Invalid parameter format: " + param);
+                }
+                
+                String paramName = param.substring(0, paramEquals).trim();
+                String paramValue = parseValue(param.substring(paramEquals + 1).trim());
+                parameters.put(paramName, paramValue);
             }
-            
-            String paramName = param.substring(0, paramEquals).trim();
-            String paramValue = parseValue(param.substring(paramEquals + 1).trim());
-            parameters.put(paramName, paramValue);
         }
         
         logger.debugf("SignatureKeyParser: parsed header - label=%s, scheme=%s, parameters=%s", 
                 signatureLabel, scheme, parameters);
+    }
+
+    /**
+     * Find the matching closing parenthesis, handling quoted strings.
+     * 
+     * @param str The string to search
+     * @param startPos The position of the opening parenthesis
+     * @return The position of the matching closing parenthesis, or -1 if not found
+     */
+    private int findMatchingClosingParen(String str, int startPos) {
+        int depth = 0;
+        boolean inQuotes = false;
+        boolean escapeNext = false;
+        
+        for (int i = startPos; i < str.length(); i++) {
+            char c = str.charAt(i);
+            
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+            
+            if (c == '\\') {
+                escapeNext = true;
+                continue;
+            }
+            
+            if (c == '"' && !escapeNext) {
+                inQuotes = !inQuotes;
+                continue;
+            }
+            
+            if (inQuotes) {
+                continue;
+            }
+            
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        
+        return -1;
+    }
+
+    /**
+     * Parse space-separated parameters, handling quoted strings.
+     * 
+     * @param content The content to parse (e.g., "scheme=jwks id=\"...\" kid=\"...\"")
+     * @return Array of parameter strings
+     */
+    private String[] parseSpaceSeparatedParams(String content) {
+        List<String> params = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inQuotes = false;
+        boolean escapeNext = false;
+        
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            
+            if (escapeNext) {
+                current.append(c);
+                escapeNext = false;
+                continue;
+            }
+            
+            if (c == '\\') {
+                escapeNext = true;
+                current.append(c);
+                continue;
+            }
+            
+            if (c == '"') {
+                inQuotes = !inQuotes;
+                current.append(c);
+                continue;
+            }
+            
+            if (c == ' ' && !inQuotes) {
+                if (current.length() > 0) {
+                    params.add(current.toString());
+                    current.setLength(0);
+                }
+            } else {
+                current.append(c);
+            }
+        }
+        
+        if (current.length() > 0) {
+            params.add(current.toString());
+        }
+        
+        return params.toArray(new String[0]);
     }
 
     /**

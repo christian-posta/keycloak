@@ -30,7 +30,9 @@ import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * Request filter to verify HTTP Message Signatures for AAuth protocol endpoints.
@@ -83,9 +85,20 @@ public class AAuthSignatureFilter implements ContainerRequestFilter {
         }
 
         try {
-            // Verify HTTP Message Signature
+            // Buffer body if Content-Digest is present (needed for validation per RFC 9421 Section 7.2.8)
+            byte[] bodyBytes = null;
+            String contentDigest = request.getHttpHeaders().getHeaderString("Content-Digest");
+            
+            if (contentDigest != null && !contentDigest.trim().isEmpty()) {
+                // Content-Digest is present, we need to buffer the body for validation
+                bodyBytes = bufferRequestBody(requestContext);
+                logger.debugf("Buffered request body for Content-Digest validation: %d bytes", 
+                    bodyBytes != null ? bodyBytes.length : 0);
+            }
+            
+            // Verify HTTP Message Signature (with body validation if Content-Digest is present)
             HTTPSigVerifier verifier = new HTTPSigVerifier(session);
-            HTTPSigVerifier.VerificationResult result = verifier.verify(request);
+            HTTPSigVerifier.VerificationResult result = verifier.verify(request, bodyBytes);
 
             logger.infof("AAuthSignatureFilter: Signature verified, agentId=%s, publicKey=%s, scheme=%s",
                     result.getAgentId(), result.getPublicKey() != null, result.getScheme());
@@ -116,6 +129,29 @@ public class AAuthSignatureFilter implements ContainerRequestFilter {
             
             requestContext.abortWith(errorResponse);
         }
+    }
+
+    /**
+     * Buffer the request body so it can be used for Content-Digest validation
+     * and still be available for downstream processing.
+     * 
+     * @param requestContext The container request context
+     * @return The buffered body bytes, or null if no body
+     * @throws IOException If reading the body fails
+     */
+    private byte[] bufferRequestBody(ContainerRequestContext requestContext) throws IOException {
+        InputStream entityStream = requestContext.getEntityStream();
+        if (entityStream == null) {
+            return null;
+        }
+        
+        // Read all bytes from the entity stream
+        byte[] bodyBytes = entityStream.readAllBytes();
+        
+        // Reset the entity stream so downstream handlers can read it
+        requestContext.setEntityStream(new ByteArrayInputStream(bodyBytes));
+        
+        return bodyBytes;
     }
 }
 

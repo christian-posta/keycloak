@@ -219,12 +219,46 @@ public class SignatureBaseBuilder {
     }
 
     /**
+     * Extract the list of covered components from a Signature-Input header.
+     * 
+     * This is useful for determining which components are signed without
+     * building the full signature base.
+     * 
+     * @param signatureInput The Signature-Input header value
+     * @param signatureLabel The signature label (e.g., "sig")
+     * @return List of covered component names
+     * @throws SignatureBaseException If parsing fails
+     */
+    public static List<String> getCoveredComponents(String signatureInput, String signatureLabel) 
+            throws SignatureBaseException {
+        SignatureInputParser parser = new SignatureInputParser(signatureInput, signatureLabel);
+        return parser.getComponents();
+    }
+
+    /**
+     * Extract the algorithm parameter from a Signature-Input header.
+     * 
+     * Per RFC 9421, the algorithm can be specified via the alg parameter.
+     * 
+     * @param signatureInput The Signature-Input header value
+     * @param signatureLabel The signature label (e.g., "sig")
+     * @return The algorithm name if specified, or null if not present
+     * @throws SignatureBaseException If parsing fails
+     */
+    public static String getAlgorithm(String signatureInput, String signatureLabel) 
+            throws SignatureBaseException {
+        SignatureInputParser parser = new SignatureInputParser(signatureInput, signatureLabel);
+        return parser.getAlgorithm();
+    }
+
+    /**
      * Parser for Signature-Input header.
      */
     private static class SignatureInputParser {
         private final List<String> components = new ArrayList<>();
         private Long created;
         private String nonce;
+        private String algorithm;
 
         public SignatureInputParser(String signatureInput, String signatureLabel) throws SignatureBaseException {
             // Parse format: label=("comp1" "comp2");created=123;nonce=abc
@@ -267,6 +301,13 @@ public class SignatureBaseBuilder {
                     created = Long.parseLong(param.substring(8));
                 } else if (param.startsWith("nonce=")) {
                     nonce = param.substring(6);
+                } else if (param.startsWith("alg=")) {
+                    // RFC 9421: alg parameter specifies the signature algorithm
+                    algorithm = param.substring(4).trim();
+                    // Remove quotes if present
+                    if (algorithm.startsWith("\"") && algorithm.endsWith("\"")) {
+                        algorithm = algorithm.substring(1, algorithm.length() - 1);
+                    }
                 }
             }
         }
@@ -281,6 +322,10 @@ public class SignatureBaseBuilder {
 
         public String getNonce() {
             return nonce;
+        }
+
+        public String getAlgorithm() {
+            return algorithm;
         }
     }
 }

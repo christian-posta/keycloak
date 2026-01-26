@@ -56,8 +56,8 @@ public class MetadataFetcher {
             String scheme = agentUri.getScheme();
             String host = agentUri.getHost();
             
-            // Allow HTTP for localhost/127.0.0.1 for testing purposes
-            boolean isLocalhost = host != null && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("[::1]"));
+            // Allow HTTP for localhost/127.0.0.1 and *.localhost subdomains for testing purposes
+            boolean isLocalhost = isLocalhostHost(host);
             if (!"https".equals(scheme) && !(isLocalhost && "http".equals(scheme))) {
                 logger.warnf("Agent identifier must use HTTPS (or HTTP for localhost): %s", agentId);
                 return null;
@@ -105,8 +105,8 @@ public class MetadataFetcher {
             String scheme = resourceUri.getScheme();
             String host = resourceUri.getHost();
             
-            // Allow HTTP for localhost/127.0.0.1 for testing purposes
-            boolean isLocalhost = host != null && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("[::1]"));
+            // Allow HTTP for localhost/127.0.0.1 and *.localhost subdomains for testing purposes
+            boolean isLocalhost = isLocalhostHost(host);
             if (!"https".equals(scheme) && !(isLocalhost && "http".equals(scheme))) {
                 logger.warnf("Resource identifier must use HTTPS (or HTTP for localhost): %s", resourceId);
                 return null;
@@ -154,8 +154,8 @@ public class MetadataFetcher {
             String scheme = uri.getScheme();
             String host = uri.getHost();
             
-            // Allow HTTP for localhost/127.0.0.1 for testing purposes
-            boolean isLocalhost = host != null && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("[::1]"));
+            // Allow HTTP for localhost/127.0.0.1 and *.localhost subdomains for testing purposes
+            boolean isLocalhost = isLocalhostHost(host);
             if (!"https".equals(scheme) && !(isLocalhost && "http".equals(scheme))) {
                 logger.warnf("JWKS URI must use HTTPS (or HTTP for localhost): %s", jwksUri);
                 return null;
@@ -180,6 +180,22 @@ public class MetadataFetcher {
             logger.warnf(e, "Failed to fetch JWKS from: %s", jwksUri);
             return null;
         }
+    }
+
+    /**
+     * Check if a host is localhost or a localhost subdomain.
+     * Allows: localhost, 127.0.0.1, [::1], *.localhost
+     */
+    private boolean isLocalhostHost(String host) {
+        if (host == null) {
+            return false;
+        }
+        // Exact matches
+        if (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("[::1]")) {
+            return true;
+        }
+        // Subdomains of localhost (e.g., backend.localhost)
+        return host.endsWith(".localhost") || host.endsWith(".localhost.");
     }
 
     /**

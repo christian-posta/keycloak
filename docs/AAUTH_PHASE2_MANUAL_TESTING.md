@@ -24,7 +24,8 @@ cd /path/to/keycloak
 ./mvnw -pl services,quarkus/server,quarkus/deployment,quarkus/dist -am install -DskipTests -DskipProtoLock=true
 
 # Full rebuild (takes longer)
-./mvnw -pl core,services,quarkus/server,quarkus/deployment,quarkus/dist -am clean install -DskipTests -DskipProtoLock=true
+# This will build dependencies in the right order
+./mvnw -pl model/infinispan,services,quarkus/server,quarkus/deployment,quarkus/dist -am clean install -DskipTests -DskipProtoLock=true
 
 # May need to do this (keep in back pocket):
 # The Infinispan marshaller classes are generated during the model/infinispan build. Rebuilding only services doesn't regenerate them, so the server JAR has stale marshallers that reference classes that don't exist or have changed.

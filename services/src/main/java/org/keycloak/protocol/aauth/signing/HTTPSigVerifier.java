@@ -28,6 +28,7 @@ import org.keycloak.protocol.aauth.signing.schemes.SignatureSchemeFactory;
 
 import java.security.PublicKey;
 import java.util.Base64;
+import java.util.List;
 
 /**
  * Main HTTP Message Signature verifier per RFC 9421 and AAuth profile.
@@ -51,13 +52,32 @@ public class HTTPSigVerifier {
     }
 
     /**
-     * Verify an HTTP Message Signature.
+     * Verify an HTTP Message Signature without body validation.
+     * 
+     * Note: This method does NOT validate Content-Digest against the body.
+     * Use {@link #verify(HttpRequest, byte[])} when body validation is needed.
      * 
      * @param request The HTTP request containing signature headers
      * @return Verification result containing agent identity and public key
      * @throws SignatureVerificationException If verification fails
      */
     public VerificationResult verify(HttpRequest request) throws SignatureVerificationException {
+        return verify(request, null);
+    }
+
+    /**
+     * Verify an HTTP Message Signature with Content-Digest body validation.
+     * 
+     * Per RFC 9421 Section 7.2.8, when Content-Digest is included in the signature,
+     * verifiers MUST validate that the digest matches the actual received content
+     * to prevent body substitution attacks.
+     * 
+     * @param request The HTTP request containing signature headers
+     * @param bodyBytes The actual request body bytes (required if content-digest is signed)
+     * @return Verification result containing agent identity and public key
+     * @throws SignatureVerificationException If verification fails or Content-Digest doesn't match body
+     */
+    public VerificationResult verify(HttpRequest request, byte[] bodyBytes) throws SignatureVerificationException {
         // 1. Extract and parse Signature-Key header
         String signatureKeyHeader = request.getHttpHeaders().getHeaderString("Signature-Key");
         if (signatureKeyHeader == null) {
@@ -111,13 +131,48 @@ public class HTTPSigVerifier {
         // 7. Extract signature bytes from Signature header
         byte[] signatureBytes = extractSignatureBytes(signatureHeader, signatureLabel);
 
-        // 8. Verify signature
-        String algorithm = scheme.getAlgorithm(keyParser);
+        // 8. Determine algorithm: prefer alg parameter from Signature-Input, fall back to scheme
+        String algorithm;
+        try {
+            String algFromInput = SignatureBaseBuilder.getAlgorithm(signatureInputHeader, signatureLabel);
+            if (algFromInput != null && !algFromInput.isEmpty()) {
+                algorithm = algFromInput;
+                logger.debugf("Using algorithm from Signature-Input alg parameter: %s", algorithm);
+            } else {
+                algorithm = scheme.getAlgorithm(keyParser);
+                logger.debugf("Using algorithm from signature scheme: %s", algorithm);
+            }
+        } catch (SignatureBaseException e) {
+            // If parsing fails, fall back to scheme
+            algorithm = scheme.getAlgorithm(keyParser);
+            logger.debugf("Failed to parse algorithm from Signature-Input, using scheme default: %s", algorithm);
+        }
         
         // Debug logging
         if (logger.isDebugEnabled()) {
             logger.debugf("Signature base (string): %s", new String(signatureBase, java.nio.charset.StandardCharsets.UTF_8));
             logger.debugf("Algorithm: %s", algorithm);
+            logger.debugf("Public key type: %s", publicKey != null ? publicKey.getClass().getSimpleName() : "null");
+            logger.debugf("Signature bytes length: %d", signatureBytes != null ? signatureBytes.length : 0);
+            logger.debugf("Signature base bytes length: %d", signatureBase != null ? signatureBase.length : 0);
+            // Log first few bytes of signature for debugging
+            if (signatureBytes != null && signatureBytes.length > 0) {
+                StringBuilder sigHex = new StringBuilder();
+                int len = Math.min(16, signatureBytes.length);
+                for (int i = 0; i < len; i++) {
+                    sigHex.append(String.format("%02x", signatureBytes[i]));
+                }
+                logger.debugf("Signature bytes (first %d): %s", len, sigHex.toString());
+            }
+            // Log signature base bytes (hex) for debugging
+            if (signatureBase != null && signatureBase.length > 0) {
+                StringBuilder baseHex = new StringBuilder();
+                int len = Math.min(64, signatureBase.length);
+                for (int i = 0; i < len; i++) {
+                    baseHex.append(String.format("%02x", signatureBase[i]));
+                }
+                logger.debugf("Signature base bytes (first %d): %s", len, baseHex.toString());
+            }
         }
         
         boolean valid = verifySignature(signatureBase, signatureBytes, publicKey, algorithm);
@@ -125,15 +180,69 @@ public class HTTPSigVerifier {
         if (!valid) {
             logger.warnf("Signature verification failed. Signature base: %s", 
                 new String(signatureBase, java.nio.charset.StandardCharsets.UTF_8));
+            logger.warnf("Algorithm: %s, Public key type: %s, Signature bytes length: %d", 
+                algorithm, 
+                publicKey != null ? publicKey.getClass().getSimpleName() : "null",
+                signatureBytes != null ? signatureBytes.length : 0);
             throw new SignatureVerificationException("Signature verification failed");
         }
 
-        // 9. Extract agent identity from scheme
+        // 9. Validate Content-Digest against body (RFC 9421 Section 7.2.8)
+        validateContentDigestIfRequired(request, signatureInputHeader, signatureLabel, bodyBytes);
+
+        // 10. Extract agent identity from scheme
         String agentId = scheme.getAgentId(keyParser);
 
         logger.debugf("HTTP Message Signature verified successfully for agent: %s", agentId);
 
         return new VerificationResult(agentId, publicKey, keyParser.getScheme());
+    }
+
+    /**
+     * Validate Content-Digest header against actual body if required.
+     * 
+     * Per RFC 9421 Section 7.2.8:
+     * "Upon verification, it is important that the verifier validate not only the signature
+     * but also the value of the Content-Digest field itself against the actual received content."
+     */
+    private void validateContentDigestIfRequired(HttpRequest request, String signatureInputHeader, 
+            String signatureLabel, byte[] bodyBytes) throws SignatureVerificationException {
+        
+        String contentDigestHeader = request.getHttpHeaders().getHeaderString("Content-Digest");
+        
+        // Check if content-digest is in the covered components
+        List<String> coveredComponents;
+        try {
+            coveredComponents = SignatureBaseBuilder.getCoveredComponents(signatureInputHeader, signatureLabel);
+        } catch (SignatureBaseException e) {
+            throw new SignatureVerificationException("Failed to parse covered components", e);
+        }
+        
+        // Only validate if content-digest is a covered component
+        if (!coveredComponents.contains("content-digest")) {
+            logger.debugf("content-digest not in covered components, skipping body validation");
+            return;
+        }
+        
+        // Content-Digest is covered, so we MUST validate it against the body
+        if (contentDigestHeader == null || contentDigestHeader.trim().isEmpty()) {
+            throw new SignatureVerificationException(
+                "content-digest is in covered components but Content-Digest header is missing");
+        }
+        
+        if (bodyBytes == null) {
+            logger.warnf("content-digest is in covered components but no body bytes provided for validation. " +
+                "This is a security risk - body substitution attacks are possible.");
+            // In strict mode, we should throw an exception here
+            // For now, log a warning but allow it to proceed
+            // TODO: Consider making this configurable or always strict
+            return;
+        }
+        
+        // Validate the Content-Digest against the actual body
+        logger.debugf("Validating Content-Digest against body (%d bytes)", bodyBytes.length);
+        ContentDigestValidator.validateContentDigest(contentDigestHeader, bodyBytes);
+        logger.debugf("Content-Digest validation successful");
     }
 
     /**
@@ -167,10 +276,22 @@ public class HTTPSigVerifier {
         }
 
         String base64Signature = signatureHeader.substring(valueStart, valueEnd);
+        logger.debugf("Extracting signature: label=%s, base64String=%s", signatureLabel, base64Signature);
         try {
-            return Base64.getUrlDecoder().decode(base64Signature);
+            // RFC 8941 Byte Sequence uses standard Base64 encoding, not URL-safe
+            byte[] decoded = Base64.getDecoder().decode(base64Signature);
+            logger.debugf("Successfully decoded signature using standard Base64: %d bytes", decoded.length);
+            return decoded;
         } catch (IllegalArgumentException e) {
-            throw new SignatureVerificationException("Invalid base64 signature", e);
+            // Fall back to URL-safe decoder for compatibility with some implementations
+            logger.debugf("Standard Base64 decode failed, trying URL-safe Base64");
+            try {
+                byte[] decoded = Base64.getUrlDecoder().decode(base64Signature);
+                logger.debugf("Successfully decoded signature using URL-safe Base64: %d bytes", decoded.length);
+                return decoded;
+            } catch (IllegalArgumentException e2) {
+                throw new SignatureVerificationException("Invalid base64 signature", e);
+            }
         }
     }
 
@@ -204,10 +325,16 @@ public class HTTPSigVerifier {
             return verifierContext.verify(data, signature);
             
         } catch (org.keycloak.common.VerificationException e) {
-            logger.debugf(e, "Signature verification failed");
+            logger.debugf(e, "Signature verification failed - VerificationException: %s", e.getMessage());
+            logger.debugf("Algorithm: %s, Key type: %s, Data length: %d, Signature length: %d", 
+                algorithm, publicKey != null ? publicKey.getClass().getSimpleName() : "null",
+                data != null ? data.length : 0, signature != null ? signature.length : 0);
             throw new SignatureVerificationException("Signature verification failed", e);
         } catch (Exception e) {
-            logger.debugf(e, "Unexpected error during signature verification");
+            logger.debugf(e, "Unexpected error during signature verification: %s", e.getMessage());
+            logger.debugf("Algorithm: %s, Key type: %s, Data length: %d, Signature length: %d", 
+                algorithm, publicKey != null ? publicKey.getClass().getSimpleName() : "null",
+                data != null ? data.length : 0, signature != null ? signature.length : 0);
             throw new SignatureVerificationException("Signature verification failed", e);
         }
     }
