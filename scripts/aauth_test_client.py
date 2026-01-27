@@ -58,10 +58,14 @@ class AAuthTestClient:
         self.jwk_x = base64.urlsafe_b64encode(public_bytes).decode().rstrip('=')
         self.kid = base64.urlsafe_b64encode(public_bytes[:16]).decode().rstrip('=')
     
-    def _build_signature_base(self, method: str, authority: str, path: str, created: int, 
-                              signature_key: Optional[str] = None, body: Optional[bytes] = None) -> bytes:
+    def _build_signature_base(self, method: str, authority: str, path: str, created: int,
+                              signature_key: Optional[str] = None) -> bytes:
         """
         Build signature base string per RFC 9421.
+        
+        Per SPEC: content-type and content-digest are optional and only required
+        if the server requires them. This implementation omits body-related
+        components from the signature.
         
         WARNING: This is a simplified implementation. For production,
         use Keycloak's SignatureBaseBuilder class for full compliance.
@@ -90,18 +94,6 @@ class AAuthTestClient:
             components.append(f'"signature-key": {signature_key}')
             signature_params_components.append('"signature-key"')
         
-        # Include content-type and content-digest if body is present
-        if body and len(body) > 0:
-            components.append('"content-type": application/x-www-form-urlencoded')
-            signature_params_components.append('"content-type"')
-            
-            # Calculate content-digest (SHA-256)
-            import hashlib
-            digest = hashlib.sha256(body).digest()
-            digest_b64 = base64.urlsafe_b64encode(digest).decode().rstrip('=')
-            components.append(f'"content-digest": sha-256=:{digest_b64}:')
-            signature_params_components.append('"content-digest"')
-        
         # Build signature-params with quoted component names per RFC 9421
         signature_params = "(" + " ".join(signature_params_components) + f");created={created}"
         components.append(f'"@signature-params": {signature_params}')
@@ -113,10 +105,13 @@ class AAuthTestClient:
         """
         Create HTTP headers with HTTP Message Signature.
         
+        Per SPEC: content-type and content-digest are optional; this implementation
+        omits body-related components from the signature.
+        
         Args:
             method: HTTP method (e.g., "POST")
             url: Full URL
-            body: Request body bytes (for content-digest calculation)
+            body: Request body bytes (used for request payload only; not included in signature)
         
         Returns:
             Dictionary of headers including Signature-Key, Signature-Input, and Signature
@@ -140,9 +135,9 @@ class AAuthTestClient:
         # Create signature-key header
         signature_key_header = f'sig=hwk;kty="OKP";crv="Ed25519";x="{self.jwk_x}";kid="{self.kid}"'
         
-        # Build signature base (include signature-key and body components if present)
-        signature_base = self._build_signature_base(method, authority, path, created, 
-                                                    signature_key=signature_key_header, body=body)
+        # Build signature base (signature-key only; no body components per SPEC optionality)
+        signature_base = self._build_signature_base(method, authority, path, created,
+                                                    signature_key=signature_key_header)
         
         # Debug output
         if verbose:
@@ -156,13 +151,8 @@ class AAuthTestClient:
         signature_bytes = self.private_key.sign(signature_base)
         signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode().rstrip('=')
         
-        # Build signature-input based on components
-        # RFC 9421 requires components to be quoted strings
-        component_list = ["@method", "@authority", "@path", "signature-key"]
-        if body and len(body) > 0:
-            component_list.extend(["content-type", "content-digest"])
-        # Quote each component as required by RFC 9421
-        quoted_components = ' '.join(f'"{comp}"' for comp in component_list)
+        # Build signature-input: @method, @authority, @path, signature-key only (no body components)
+        quoted_components = '"@method" "@authority" "@path" "signature-key"'
         signature_input = f'sig=({quoted_components});created={created}'
         
         signature = f'sig=:{signature_b64}:'
@@ -174,13 +164,6 @@ class AAuthTestClient:
             'Signature': signature,
             'Content-Type': 'application/x-www-form-urlencoded'
         }
-        
-        # Add Content-Digest if body is present
-        if body and len(body) > 0:
-            import hashlib
-            digest = hashlib.sha256(body).digest()
-            digest_b64 = base64.urlsafe_b64encode(digest).decode().rstrip('=')
-            headers['Content-Digest'] = f'sha-256=:{digest_b64}:'
         
         return headers
     
@@ -196,7 +179,7 @@ class AAuthTestClient:
             method: HTTP method (e.g., "POST")
             url: Full URL
             agent_url: Agent's URL (e.g., "http://localhost:9002")
-            body: Request body bytes (for content-digest calculation)
+            body: Request body bytes (used for request payload only; not included in signature)
         
         Returns:
             Dictionary of headers including Signature-Key, Signature-Input, and Signature
@@ -218,9 +201,9 @@ class AAuthTestClient:
         # Format: sig=jwks;id="<agent_url>";kid="<key_id>"
         signature_key_header = f'sig=jwks;id="{agent_url}";kid="{self.kid}"'
         
-        # Build signature base
-        signature_base = self._build_signature_base(method, authority, path, created, 
-                                                    signature_key=signature_key_header, body=body)
+        # Build signature base (no body components per SPEC optionality)
+        signature_base = self._build_signature_base(method, authority, path, created,
+                                                    signature_key=signature_key_header)
         
         if verbose:
             print(f"\nDEBUG Signature Base (scheme=jwks):")
@@ -231,11 +214,8 @@ class AAuthTestClient:
         signature_bytes = self.private_key.sign(signature_base)
         signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode().rstrip('=')
         
-        # Build signature-input
-        component_list = ["@method", "@authority", "@path", "signature-key"]
-        if body and len(body) > 0:
-            component_list.extend(["content-type", "content-digest"])
-        quoted_components = ' '.join(f'"{comp}"' for comp in component_list)
+        # Build signature-input: @method, @authority, @path, signature-key only (no body components)
+        quoted_components = '"@method" "@authority" "@path" "signature-key"'
         signature_input = f'sig=({quoted_components});created={created}'
         
         signature = f'sig=:{signature_b64}:'
@@ -247,12 +227,6 @@ class AAuthTestClient:
             'Signature': signature,
             'Content-Type': 'application/x-www-form-urlencoded'
         }
-        
-        if body and len(body) > 0:
-            import hashlib
-            digest = hashlib.sha256(body).digest()
-            digest_b64 = base64.urlsafe_b64encode(digest).decode().rstrip('=')
-            headers['Content-Digest'] = f'sha-256=:{digest_b64}:'
         
         return headers
     
@@ -449,7 +423,7 @@ class AAuthTestClient:
         # Convert form data to bytes for signature
         form_data_bytes = urllib.parse.urlencode(form_data).encode('utf-8')
         
-        # Create signed request (include body for content-digest)
+        # Create signed request (body not included in signature per SPEC optionality)
         headers = self.create_signed_headers('POST', token_url, body=form_data_bytes, verbose=verbose)
         
         # Make request
@@ -615,7 +589,7 @@ class AAuthTestClient:
         Args:
             method: HTTP method
             url: Full URL
-            body: Request body bytes (optional)
+            body: Request body bytes (optional; used for request payload only, not included in signature)
             upstream_token: Upstream auth token JWT to include in Signature-Key
             verbose: Enable verbose output
         
@@ -625,11 +599,11 @@ class AAuthTestClient:
         parsed_url = urllib.parse.urlparse(url)
         now = int(time.time())
         
-        # Build signature base string components
+        # Build signature base string components (no body components per SPEC optionality)
         # Note: @path should NOT include query string per RFC 9421
         components = []
-        components.append(('@method', method))
-        components.append(('@authority', parsed_url.netloc))
+        components.append(('@method', method.upper()))
+        components.append(('@authority', parsed_url.netloc.lower()))
         path = parsed_url.path if parsed_url.path else '/'
         components.append(('@path', path))
         
@@ -637,22 +611,9 @@ class AAuthTestClient:
         if parsed_url.query:
             components.append(('@query', '?' + parsed_url.query))
         
-        # Add content-type if body present
-        if body:
-            components.append(('content-type', 'application/x-www-form-urlencoded'))
-        
-        # Add content-digest if body present
-        if body:
-            import hashlib
-            digest = hashlib.sha256(body).digest()
-            digest_b64 = base64.urlsafe_b64encode(digest).decode('utf-8').rstrip('=')
-            components.append(('content-digest', f'sha-256=:{digest_b64}:'))
-        
         # Build signature params (without label prefix)
         # Per RFC 9421: @signature-params value does NOT include the label (sig=)
-        sig_input_parts = []
-        for name, value in components:
-            sig_input_parts.append(f'"{name}"')
+        sig_input_parts = [f'"{name}"' for name, _ in components]
         sig_input_parts.append('"signature-key"')  # Add signature-key component
         
         # sig_params is the value for @signature-params (no label prefix)
@@ -666,14 +627,8 @@ class AAuthTestClient:
         signature_key_header = f'sig=jwt;jwt={upstream_token}' if upstream_token else f'sig=jwt'
         
         # Build signature base string (must include signature-key component and @signature-params)
-        sig_base_parts = []
-        for name, value in components:
-            sig_base_parts.append(f'"{name}": {value}')
+        sig_base_parts = [f'"{name}": {value}' for name, value in components]
         sig_base_parts.append(f'"signature-key": {signature_key_header}')  # Add signature-key to base
-        
-        # Add @signature-params line (required by RFC 9421)
-        # Format: "@signature-params": (component1 component2 ...);created=timestamp
-        # Note: Does NOT include the label prefix (sig=)
         sig_base_parts.append(f'"@signature-params": {sig_params}')
         
         sig_base = '\n'.join(sig_base_parts)
@@ -689,9 +644,6 @@ class AAuthTestClient:
             'Signature-Input': sig_input,
             'Signature': f'sig=:{sig_b64}:'
         }
-        
-        if body:
-            headers['Content-Digest'] = f'sha-256=:{digest_b64}:'
         
         if verbose:
             print(f"Signature Base String:\n{sig_base}\n")
