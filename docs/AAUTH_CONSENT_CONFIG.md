@@ -200,6 +200,89 @@ python scripts/aauth_test_client.py \
 
 This should return an `auth_token` directly if `data.read` is not in your consent-required scopes.
 
+## Post-Consent Flow: What Happens When User Grants Consent
+
+When the user clicks **Allow** on the consent screen, the following sequence occurs:
+
+### 1. Keycloak Redirects to Agent's Callback
+
+Keycloak redirects the **browser** to the `redirect_uri` (the agent's callback URL) with the authorization code and state:
+
+```
+HTTP 303 See Other
+Location: {redirect_uri}?code={authorization_code}&state={state}
+```
+
+**Critical**: `redirect_uri` MUST be the **agent's** callback URL (e.g. `http://backend.localhost:8000/auth/aauth/callback`), NOT the frontend UI URL. The agent needs to receive the code because only the agent can exchange it (requires the agent's signing key).
+
+### 2. Agent Receives the Code
+
+The agent's callback endpoint receives the HTTP GET with `code` and `state` query parameters. The agent must:
+
+1. **Extract** `code` and `state` from the URL
+2. **Exchange** the code for tokens by making a signed POST to Keycloak's `/agent/token` endpoint:
+   ```
+   POST /realms/{realm}/protocol/aauth/agent/token
+   Content-Type: application/x-www-form-urlencoded
+   Signature-Key: ... (agent's signing key)
+   Signature: ... (RFC 9421 signature)
+
+   request_type=code&code={code}&redirect_uri={same_redirect_uri}&state={state}
+   ```
+3. **Store** the returned `auth_token` and `refresh_token` (e.g. in session, secure cookie, or pass to frontend via secure channel)
+4. **Redirect** the user to the frontend UI with a **success indicator** (e.g. `?success=1` or session cookie)
+
+### 3. Frontend UI Expectations
+
+The **frontend** (e.g. `http://localhost:3050`) should **NOT** expect to receive `code` or `state`. Those are consumed by the agent's callback. Instead:
+
+- **Success case**: The agent redirects to the frontend with a success indicator (e.g. `?aauth_success=1` or the agent sets a session cookie). The frontend should detect this and show "Authorization complete" or proceed to the next step.
+- **Error case**: If the agent encounters an error (e.g. code exchange failed), the agent should redirect to the frontend with error params (e.g. `?aauth_error=1&error=...&error_description=...`).
+
+**Common mistake**: Using the frontend URL as `redirect_uri`. If the frontend receives the redirect, it will see `code` and `state` in the URL—but the frontend cannot exchange the code (it doesn't have the agent's signing key). The frontend would show "missing code or state" if it expects the agent to have already exchanged them and passed tokens another way.
+
+**Correct architecture**:
+```
+User → Keycloak consent → Keycloak redirects to AGENT callback (8000) with code
+       → Agent exchanges code for tokens
+       → Agent redirects to FRONTEND (3050) with success/error
+       → Frontend shows result (no code/state needed)
+```
+
+### 4. Agent Callback Implementation Checklist
+
+Your agent's `/auth/aauth/callback` (or equivalent) must:
+
+- [ ] Handle GET requests with `code` and `state` query params
+- [ ] Immediately exchange the code via signed POST to `/agent/token`
+- [ ] Use the same `redirect_uri` in the exchange that was used in the original auth request
+- [ ] On success: redirect user to frontend with success (e.g. `{frontend_url}?aauth_success=1`)
+- [ ] On error: redirect user to frontend with error (e.g. `{frontend_url}?aauth_error=1&error=...`)
+
+## Debugging: Consent Screen Not Showing
+
+Enable AAuth logging to trace the consent flow:
+
+```bash
+# CLI - INFO level shows consent flow milestones
+./kc.sh start --log-level=org.keycloak.protocol.aauth:INFO
+
+# CLI - DEBUG level for verbose output
+./kc.sh start --log-level=org.keycloak.protocol.aauth:DEBUG
+```
+
+**Key log messages to look for:**
+- `AAuth auth grant: scope=X, requiresConsent=true` → request_token was issued (agent must redirect user to /agent/auth)
+- `AAuth auth grant: scope=X, requiresConsent=false` → auth_token issued directly (no consent flow)
+- `AAuth consent flow: User authenticated, showing consent screen` → Consent page should render
+- `AAuth consent flow: Failed to render consent screen` → Template/theme error (check stack trace)
+
+**Common issues:**
+1. **Getting auth_token instead of request_token?** Your scope may not require consent. Use `profile`, `email`, or `openid` (default consent-required) or configure realm attributes.
+2. **Agent not redirecting?** After receiving request_token, the agent must redirect the user to `{base}/realms/{realm}/protocol/aauth/agent/auth?request_token=...&redirect_uri=...&state=...`
+3. **Missing redirect_uri?** It's required when requesting consent-required scopes.
+4. **Frontend shows "missing code or state" after consent?** The frontend is likely the `redirect_uri` target. It should be the **agent's** callback URL instead. Keycloak redirects to `redirect_uri` with code and state—the agent must receive them, exchange the code for tokens, then redirect the user to the frontend with a success indicator (not code/state).
+
 ## Related Documentation
 
 - [AAuth Phase 3 Manual Testing Guide](AAUTH_PHASE3_MANUAL_TESTING.md) - Testing the user consent flow

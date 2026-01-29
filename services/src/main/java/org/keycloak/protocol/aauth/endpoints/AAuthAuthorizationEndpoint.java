@@ -24,31 +24,48 @@ import org.keycloak.common.util.Time;
 import org.keycloak.events.Details;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.events.EventType;
+import org.keycloak.forms.login.freemarker.model.RealmBean;
+import org.keycloak.forms.login.freemarker.model.UrlBean;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserSessionModel;
-import org.keycloak.sessions.AuthenticationSessionModel;
-import org.keycloak.sessions.RootAuthenticationSessionModel;
-import org.keycloak.models.utils.SystemClientUtil;
+import org.keycloak.protocol.aauth.forms.AAuthConsentBean;
 import org.keycloak.protocol.aauth.storage.AAuthAuthorizationCode;
 import org.keycloak.protocol.aauth.storage.AAuthRequestToken;
 import org.keycloak.protocol.aauth.storage.AAuthRequestTokenStore;
 import org.keycloak.services.ErrorPageException;
 import org.keycloak.services.Urls;
+import org.keycloak.services.managers.AuthenticationManager;
 import org.keycloak.services.managers.AuthenticationSessionManager;
+import org.keycloak.sessions.AuthenticationSessionModel;
+import org.keycloak.sessions.RootAuthenticationSessionModel;
+import org.keycloak.theme.Theme;
+import org.keycloak.theme.beans.AdvancedMessageFormatterMethod;
+import org.keycloak.theme.beans.LocaleBean;
+import org.keycloak.theme.beans.MessageFormatterMethod;
+import org.keycloak.theme.freemarker.FreeMarkerProvider;
+import org.keycloak.models.utils.SystemClientUtil;
+import org.keycloak.utils.MediaType;
+
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Properties;
 
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
 import jakarta.ws.rs.POST;
-import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriBuilder;
 
 import java.net.URI;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -87,10 +104,85 @@ public class AAuthAuthorizationEndpoint {
     }
 
     @POST
-    @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
+    @Consumes(jakarta.ws.rs.core.MediaType.APPLICATION_FORM_URLENCODED)
     public Response authorizePost() {
         MultivaluedMap<String, String> params = session.getContext().getHttpRequest().getDecodedFormParameters();
         return processAuthorization(params);
+    }
+
+    @Path("consent")
+    @POST
+    @Consumes(jakarta.ws.rs.core.MediaType.APPLICATION_FORM_URLENCODED)
+    public Response processConsent() {
+        event.event(EventType.LOGIN);
+        
+        checkSsl();
+        checkRealm();
+        
+        MultivaluedMap<String, String> formData = session.getContext()
+                .getHttpRequest().getDecodedFormParameters();
+        
+        String consentCode = formData.getFirst("consent_code");
+        boolean isAccept = formData.containsKey("accept");
+        
+        if (consentCode == null || consentCode.isEmpty()) {
+            return createErrorResponse(null, OAuthErrorException.INVALID_REQUEST, 
+                    "Missing required parameter: consent_code");
+        }
+        
+        // Retrieve and consume consent data
+        Map<String, String> consentData = session.singleUseObjects().remove(consentCode);
+        if (consentData == null) {
+            return createErrorResponse(null, OAuthErrorException.INVALID_REQUEST, 
+                    "Invalid or expired consent code");
+        }
+        
+        String requestTokenId = consentData.get("request_token_id");
+        String redirectUri = consentData.get("redirect_uri");
+        String state = consentData.get("state");
+        String userSessionId = consentData.get("user_session_id");
+        
+        if (!isAccept) {
+            // User denied - redirect with error
+            event.error(org.keycloak.events.Errors.REJECTED_BY_USER);
+            return redirectWithError(redirectUri, "access_denied", 
+                    "User denied the authorization request", state);
+        }
+        
+        // User accepted - retrieve request token and generate code
+        AAuthRequestTokenStore tokenStore = new AAuthRequestTokenStore(session);
+        AAuthRequestToken tokenData = tokenStore.getRequestTokenById(requestTokenId);
+        
+        if (tokenData == null) {
+            return createErrorResponse(redirectUri, OAuthErrorException.INVALID_REQUEST, 
+                    "Request token expired");
+        }
+        
+        // Retrieve user session from stored ID
+        UserSessionModel userSession = null;
+        if (userSessionId != null) {
+            userSession = session.sessions().getUserSession(realm, userSessionId);
+        }
+        if (userSession == null) {
+            // Fallback: try to get from SSO cookie
+            AuthenticationManager.AuthResult authResult = AuthenticationManager.authenticateIdentityCookie(session, realm, true);
+            if (authResult != null) {
+                userSession = authResult.getSession();
+            }
+        }
+        if (userSession == null) {
+            return createErrorResponse(redirectUri, OAuthErrorException.INVALID_REQUEST, 
+                    "User session not found or expired");
+        }
+        
+        String code = generateAuthorizationCode(tokenData, userSession);
+        
+        event.event(EventType.CODE_TO_TOKEN);
+        event.detail(Details.CONSENT, Details.CONSENT_VALUE_CONSENT_GRANTED);
+        event.detail(Details.CODE_ID, code);
+        event.success();
+        
+        return redirectWithCode(redirectUri, code, state);
     }
 
 
@@ -128,15 +220,19 @@ public class AAuthAuthorizationEndpoint {
         }
         
         if (requestToken == null || requestToken.isEmpty()) {
+            logger.warn("AAuth consent flow: Missing request_token parameter");
             return createErrorResponse(redirectUri, OAuthErrorException.INVALID_REQUEST, 
                     "Missing required parameter: request_token");
         }
+
+        logger.infof("AAuth consent flow: Validating request_token (redirect_uri=%s)", redirectUri != null ? "present" : "from token");
 
         // Validate request token
         AAuthRequestTokenStore tokenStore = new AAuthRequestTokenStore(session);
         AAuthRequestToken tokenData = tokenStore.validateRequestToken(requestToken);
         
         if (tokenData == null) {
+            logger.warn("AAuth consent flow: Invalid or expired request_token");
             return createErrorResponse(redirectUri, OAuthErrorException.INVALID_REQUEST, 
                     "Invalid or expired request_token");
         }
@@ -149,17 +245,23 @@ public class AAuthAuthorizationEndpoint {
                     "redirect_uri mismatch");
         }
 
-        // Check if user is authenticated
-        UserSessionModel userSession = session.getContext().getUserSession();
-        UserModel user = session.getContext().getUser();
+        // Check if user is authenticated by looking up existing session from SSO cookie
+        // This finds users already logged in via OIDC or any other protocol
+        AuthenticationManager.AuthResult authResult = AuthenticationManager.authenticateIdentityCookie(session, realm, true);
         
-        if (userSession == null || user == null) {
+        if (authResult == null || authResult.getSession() == null) {
             // User not authenticated - redirect to login
+            logger.infof("AAuth consent flow: User not authenticated (no SSO cookie), redirecting to login (agent=%s)", tokenData.getAgentId());
             return redirectToLogin(requestToken, redirectUri, state);
         }
 
+        UserSessionModel userSession = authResult.getSession();
+        UserModel user = authResult.getUser();
+
         // User is authenticated - show consent screen
-        return showConsentScreen(tokenData, user);
+        logger.infof("AAuth consent flow: User authenticated via SSO cookie, showing consent screen (agent=%s, resource=%s, user=%s)", 
+                tokenData.getAgentId(), tokenData.getResourceId(), user.getUsername());
+        return showConsentScreen(tokenData, user, userSession);
     }
 
     private Response redirectToLogin(String requestToken, String redirectUri, String state) {
@@ -199,27 +301,63 @@ public class AAuthAuthorizationEndpoint {
         return Response.seeOther(loginUriBuilder.build()).build();
     }
 
-    private Response showConsentScreen(AAuthRequestToken tokenData, UserModel user) {
-        // For Phase 3, we'll auto-grant consent after authentication
-        // In future phases, we can add a proper consent screen
-        
-        // Generate authorization code directly
-        UserSessionModel userSession = session.getContext().getUserSession();
-        if (userSession == null) {
-            // Reconstruct request token string for redirect
-            String requestTokenStr = tokenData.getId() + "." + Time.currentTime() + ".dummy";
-            return redirectToLogin(requestTokenStr, tokenData.getRedirectUri(), tokenData.getState());
+    private Response showConsentScreen(AAuthRequestToken tokenData, UserModel user, UserSessionModel userSession) {
+        try {
+            // 1. Create one-time consent code and store request_token_id + user session id
+            String consentCode = UUID.randomUUID().toString();
+            Map<String, String> consentData = new HashMap<>();
+            consentData.put("request_token_id", tokenData.getId());
+            consentData.put("redirect_uri", tokenData.getRedirectUri());
+            consentData.put("user_session_id", userSession.getId()); // Store user session for code generation
+            if (tokenData.getState() != null) {
+                consentData.put("state", tokenData.getState());
+            }
+            session.singleUseObjects().put(consentCode, 600, consentData); // 10 min TTL
+
+            // 2. Get theme and FreeMarker provider
+            Theme theme = session.theme().getTheme(Theme.Type.LOGIN);
+            FreeMarkerProvider freeMarker = session.getProvider(FreeMarkerProvider.class);
+
+            // 3. Setup attributes (following KeycloakErrorHandler pattern)
+            Locale locale = session.getContext().resolveLocale(user);
+            Properties messagesBundle = theme.getEnhancedMessages(realm, locale);
+            Map<String, Object> attributes = new HashMap<>();
+            
+            attributes.put("realm", new RealmBean(realm));
+            attributes.put("url", new UrlBean(realm, theme, session.getContext().getUri().getBaseUri(), null));
+            attributes.put("locale", new LocaleBean(realm, locale, 
+                    session.getContext().getUri().getRequestUriBuilder(), messagesBundle));
+            attributes.put("lang", locale.toLanguageTag());
+            attributes.put("msg", new MessageFormatterMethod(locale, messagesBundle));
+            attributes.put("advancedMsg", new AdvancedMessageFormatterMethod(locale, messagesBundle));
+            Properties themeProperties = theme.getProperties();
+            attributes.put("properties", themeProperties);
+            // darkMode required by keycloak.v2 template.ftl registrationLayout macro
+            attributes.put("darkMode", "true".equals(themeProperties.getProperty("darkMode"))
+                    && Boolean.TRUE.equals(realm.getAttribute("darkMode", true)));
+            // pageId is derived from template name (without .ftl extension)
+            attributes.put("pageId", "aauth-grant");
+
+            // 4. Add AAuth-specific bean
+            String consentActionUrl = session.getContext().getUri().getBaseUri()
+                    + "realms/" + realm.getName() + "/protocol/aauth/agent/auth/consent";
+            List<String> scopes = tokenData.getScope() != null && !tokenData.getScope().trim().isEmpty()
+                    ? Arrays.asList(tokenData.getScope().split("\\s+")) 
+                    : Collections.emptyList();
+            
+            attributes.put("aauth", new AAuthConsentBean(
+                    consentCode, tokenData.getAgentId(), tokenData.getResourceId(), 
+                    scopes, consentActionUrl));
+
+            // 5. Render template
+            logger.infof("AAuth consent flow: Rendering consent template login-aauth-grant.ftl for theme=%s", theme.getName());
+            String content = freeMarker.processTemplate(attributes, "login-aauth-grant.ftl", theme);
+            return Response.ok(content).type(MediaType.TEXT_HTML_UTF_8_TYPE).build();
+        } catch (Throwable t) {
+            logger.error("AAuth consent flow: Failed to render consent screen", t);
+            return createErrorResponse(tokenData.getRedirectUri(), OAuthErrorException.SERVER_ERROR, 
+                    "Failed to render consent screen");
         }
-        
-        String code = generateAuthorizationCode(tokenData, userSession);
-        
-        // Note: Request token will be consumed during code exchange to prevent reuse
-        
-        event.event(EventType.CODE_TO_TOKEN);
-        event.detail(Details.CODE_ID, code);
-        event.success();
-        
-        return redirectWithCode(tokenData.getRedirectUri(), code, tokenData.getState());
     }
 
     private String generateAuthorizationCode(AAuthRequestToken tokenData, UserSessionModel userSession) {
@@ -279,7 +417,7 @@ public class AAuthAuthorizationEndpoint {
         // Return JSON error response
         return Response.status(Response.Status.BAD_REQUEST)
                 .entity(String.format("{\"error\":\"%s\",\"error_description\":\"%s\"}", error, errorDescription))
-                .type(MediaType.APPLICATION_JSON)
+                .type(MediaType.APPLICATION_JSON_TYPE)
                 .build();
     }
 

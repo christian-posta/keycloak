@@ -154,6 +154,30 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 . Use the refresh token to get a new auth token
 . Consider increasing token lifespan if this happens frequently
 
+==== Consent Screen Not Showing
+
+**Symptoms**: You expect to see the AAuth consent screen but it never appears.
+
+**Common causes**:
+
+1. **Direct grant instead of request_token**: If your agent requests scopes that don't require consent (e.g. `data.read`), the auth server returns an `auth_token` directly. No consent flow occurs.
+   * Check: Does your token response contain `request_token` or `auth_token`?
+   * Fix: Request consent-required scopes (e.g. `profile`, `email`, `openid`) or configure `aauth.consent.required.scopes` / `aauth.consent.required.scope.prefixes` realm attributes. See xref:aauth-consent-config[AAuth Consent Configuration].
+
+2. **Agent not redirecting to authorization endpoint**: After receiving a `request_token`, the agent must redirect the user to `{base_url}/realms/{realm}/protocol/aauth/agent/auth?request_token=...&redirect_uri=...&state=...`
+   * Check: Is your app performing this redirect after getting a request_token?
+   * Fix: Implement the redirect in your agent. The user must visit the agent/auth URL in a browser.
+
+3. **Missing redirect_uri**: When consent is required, the auth request must include `redirect_uri`.
+   * Check: Enable INFO logging and look for "AAuth auth grant: scope=..., requiresConsent=true, redirectUri=null"
+   * Fix: Always pass `redirect_uri` when requesting consent-required scopes.
+
+**Debugging**: Enable AAuth logging (see below). Look for these INFO messages:
+* `AAuth auth grant: scope=X, requiresConsent=true` - Consent was required, request_token issued
+* `AAuth consent flow: User not authenticated, redirecting to login` - User needs to log in first
+* `AAuth consent flow: User authenticated, showing consent screen` - Consent screen should render
+* `AAuth consent flow: Failed to render consent screen` - Template or theme issue
+
 ==== Debug Logging
 
 Enable debug logging to get more information about AAuth processing:
@@ -162,8 +186,11 @@ Enable debug logging to get more information about AAuth processing:
 
 [source,bash]
 ----
-# Enable AAuth debug logging
+# Enable AAuth debug logging (recommended for consent flow debugging)
 ./kc.sh start --log-level=org.keycloak.protocol.aauth:DEBUG
+
+# Or INFO level - shows consent flow milestones without verbose debug
+./kc.sh start --log-level=org.keycloak.protocol.aauth:INFO
 ----
 
 ===== Using Configuration File
@@ -172,7 +199,11 @@ In `keycloak.conf`:
 
 [source,properties]
 ----
+# Debug level - verbose
 quarkus.log.category."org.keycloak.protocol.aauth".level=DEBUG
+
+# INFO level - consent flow milestones
+quarkus.log.category."org.keycloak.protocol.aauth".level=INFO
 ----
 
 ===== Log Categories
@@ -182,10 +213,10 @@ quarkus.log.category."org.keycloak.protocol.aauth".level=DEBUG
 |Category |Description
 
 |`org.keycloak.protocol.aauth`
-|All AAuth components
+|All AAuth components (includes consent flow)
 
 |`org.keycloak.protocol.aauth.grants`
-|Grant type processing
+|Grant type processing (request_token vs auth_token decision)
 
 |`org.keycloak.protocol.aauth.signing`
 |Signature verification

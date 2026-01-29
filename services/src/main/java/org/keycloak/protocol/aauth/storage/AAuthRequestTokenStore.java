@@ -145,5 +145,36 @@ public class AAuthRequestTokenStore {
         
         return false;
     }
+
+    /**
+     * Retrieve request token by ID directly (for consent flow).
+     * 
+     * @param id Request token ID
+     * @return Request token data or null if invalid/expired
+     */
+    public AAuthRequestToken getRequestTokenById(String id) {
+        if (id == null || id.isEmpty()) {
+            return null;
+        }
+        
+        SingleUseObjectProvider store = session.singleUseObjects();
+        Map<String, String> data = store.get(id);
+        
+        if (data == null) {
+            logger.debugf("Request token not found: %s", id);
+            return null;
+        }
+        
+        AAuthRequestToken token = AAuthRequestToken.deserialize(data);
+        
+        // Check expiration
+        if (Time.currentTime() > token.getExpiration()) {
+            logger.debugf("Request token expired: %s", id);
+            store.remove(id); // Clean up expired token
+            return null;
+        }
+        
+        return token;
+    }
 }
 

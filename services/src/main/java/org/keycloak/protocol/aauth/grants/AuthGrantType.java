@@ -161,6 +161,8 @@ public class AuthGrantType implements OAuth2GrantType {
 
         // Evaluate authorization policy - determine if user consent is required
         boolean requiresConsent = requiresUserConsent(realm, grantedScope, resourceId);
+        logger.infof("AAuth auth grant: scope=%s, requiresConsent=%s, redirectUri=%s", 
+                grantedScope, requiresConsent, redirectUri != null ? "present" : "null");
         
         if (requiresConsent) {
             // User consent required - issue request_token
@@ -182,7 +184,7 @@ public class AuthGrantType implements OAuth2GrantType {
             response.setExpiresIn(600); // 10 minutes
             response.setTokenType("AAuth");
             
-            logger.debugf("Issued request_token for agent: %s, resource: %s (user consent required)", agentId, resourceId);
+            logger.infof("AAuth: Issued request_token for agent=%s, resource=%s (user consent required - agent must redirect user to /agent/auth)", agentId, resourceId);
             
             return cors.add(Response.ok(response, MediaType.APPLICATION_JSON_TYPE));
         }

@@ -2,9 +2,14 @@
 # Build script for AAuth implementation
 # Builds the required modules for AAuth development and testing
 #
+# Resilient build: tries full AAuth module build first, falls back to server-only
+# build if that fails (e.g. due to model/infinispan test marshallers, testsuite
+# issues, or proto-schema-compatibility network problems).
+#
 # Usage: ./scripts/build_aauth.sh
 
-set -e
+# Don't use set -e - we need to catch build failures and try fallback
+set +e
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -25,28 +30,39 @@ fi
 # Make mvnw executable if it isn't already
 chmod +x ./mvnw
 
-echo -e "${YELLOW}Building modules:${NC}"
-echo -e "  - model/infinispan"
-echo -e "  - services"
-echo -e "  - quarkus/server"
-echo -e "  - quarkus/deployment"
-echo -e "  - quarkus/dist"
-echo ""
-
-echo -e "${YELLOW}Maven command:${NC}"
+# Primary build: AAuth modules + server
+echo -e "${YELLOW}Attempt 1: Building AAuth modules + server${NC}"
+echo -e "  - model/infinispan, services, quarkus/server, quarkus/deployment, quarkus/dist"
 echo -e "${BLUE}./mvnw -pl model/infinispan,services,quarkus/server,quarkus/deployment,quarkus/dist -am clean install -DskipTests -DskipProtoLock=true${NC}\n"
 
-# Run the build
 ./mvnw -pl model/infinispan,services,quarkus/server,quarkus/deployment,quarkus/dist -am clean install -DskipTests -DskipProtoLock=true
-
 BUILD_RESULT=$?
 
 if [ $BUILD_RESULT -eq 0 ]; then
-    echo -e "\n${GREEN}✓ Build completed successfully${NC}"
+    echo -e "\n${GREEN}✓ Build completed successfully (primary)${NC}"
     echo -e "\n${GREEN}You can now run Keycloak with:${NC}"
     echo -e "  ${BLUE}java -jar quarkus/server/target/lib/quarkus-run.jar start-dev${NC}"
     exit 0
-else
-    echo -e "\n${RED}✗ Build failed${NC}"
-    exit 1
 fi
+
+# Fallback: server-only build (avoids model/infinispan tests, testsuite, etc.)
+echo -e "\n${YELLOW}Primary build failed. Trying fallback: server-only build${NC}"
+echo -e "  (Skips testsuite and other modules that may fail in dev environments)"
+echo -e "${BLUE}./mvnw -pl quarkus/deployment,quarkus/dist -am -DskipTests -DskipProtoLock=true clean install${NC}\n"
+
+./mvnw -pl quarkus/deployment,quarkus/dist -am -DskipTests -DskipProtoLock=true clean install
+BUILD_RESULT=$?
+
+if [ $BUILD_RESULT -eq 0 ]; then
+    echo -e "\n${GREEN}✓ Build completed successfully (fallback - server only)${NC}"
+    echo -e "\n${GREEN}You can now run Keycloak with:${NC}"
+    echo -e "  ${BLUE}java -jar quarkus/server/target/lib/quarkus-run.jar start-dev${NC}"
+    exit 0
+fi
+
+echo -e "\n${RED}✗ Build failed (both primary and fallback)${NC}"
+echo -e "\n${YELLOW}Common causes:${NC}"
+echo -e "  - JDK 17 or 21 required (check: java -version)"
+echo -e "  - Network/proxy issues (try: -DskipProtoLock=true is already set)"
+echo -e "  - Run full build: ./mvnw clean install"
+exit 1
