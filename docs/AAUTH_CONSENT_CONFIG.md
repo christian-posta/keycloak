@@ -44,6 +44,18 @@ This ensures that existing deployments continue to work without configuration ch
 
 **Important**: Once you set either attribute (even to an empty array `[]`), the system will use **only** your configured lists and will not apply the defaults. To restore default behavior, remove the attributes entirely.
 
+## Session-scoped consent
+
+Once a user consents to an agent, resource, and set of scopes while logged in, that consent is remembered for the **current Keycloak session**. Subsequent user-delegation auth flows for the same agent and resource that request the same or a subset of those scopes will **skip the consent screen** and redirect with an authorization code immediately.
+
+- Consent is stored in the user session (Keycloak SSO session). When the user logs out or the session expires, consent is cleared.
+- To force the consent screen to be shown every time (e.g. for re-authorization or testing), the agent can add `prompt=consent` to the authorization URL when redirecting the user to `/agent/auth`.
+
+**Example (force consent):**
+```
+GET /realms/{realm}/protocol/aauth/agent/auth?request_token=...&redirect_uri=...&state=...&prompt=consent
+```
+
 ## Configuring via REST API
 
 The easiest way to configure these attributes is using the provided script:

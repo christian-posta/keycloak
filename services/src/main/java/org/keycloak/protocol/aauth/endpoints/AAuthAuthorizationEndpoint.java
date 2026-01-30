@@ -48,14 +48,18 @@ import org.keycloak.theme.beans.MessageFormatterMethod;
 import org.keycloak.theme.freemarker.FreeMarkerProvider;
 import org.keycloak.models.utils.SystemClientUtil;
 import org.keycloak.utils.MediaType;
+import org.keycloak.util.TokenUtil;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
@@ -84,6 +88,11 @@ public class AAuthAuthorizationEndpoint {
     private static final String CODE_PARAM = "code";
     private static final String ERROR_PARAM = "error";
     private static final String ERROR_DESCRIPTION_PARAM = "error_description";
+    private static final String PROMPT_PARAM = "prompt";
+    private static final String PROMPT_CONSENT = "consent";
+
+    /** Session note prefix for AAuth consent: key is aauth.consent.{agentId}|{resourceId}, value is comma-separated scopes. */
+    private static final String SESSION_NOTE_AAUTH_CONSENT_PREFIX = "aauth.consent.";
 
     private final KeycloakSession session;
     private final EventBuilder event;
@@ -174,14 +183,17 @@ public class AAuthAuthorizationEndpoint {
             return createErrorResponse(redirectUri, OAuthErrorException.INVALID_REQUEST, 
                     "User session not found or expired");
         }
-        
+
+        // Record consent in session so we can skip the consent screen on subsequent requests this session
+        addSessionConsent(userSession, tokenData.getAgentId(), tokenData.getResourceId(), tokenData.getScope());
+
         String code = generateAuthorizationCode(tokenData, userSession);
-        
+
         event.event(EventType.CODE_TO_TOKEN);
         event.detail(Details.CONSENT, Details.CONSENT_VALUE_CONSENT_GRANTED);
         event.detail(Details.CODE_ID, code);
         event.success();
-        
+
         return redirectWithCode(redirectUri, code, state);
     }
 
@@ -258,8 +270,22 @@ public class AAuthAuthorizationEndpoint {
         UserSessionModel userSession = authResult.getSession();
         UserModel user = authResult.getUser();
 
+        // If user already consented to this agent+resource+scopes this session, skip consent screen (unless prompt=consent)
+        String prompt = params.getFirst(PROMPT_PARAM);
+        if (!TokenUtil.hasPrompt(prompt, PROMPT_CONSENT)
+                && hasSessionConsent(userSession, tokenData.getAgentId(), tokenData.getResourceId(), tokenData.getScope())) {
+            event.detail(Details.CONSENT, Details.CONSENT_VALUE_PERSISTED_CONSENT);
+            String code = generateAuthorizationCode(tokenData, userSession);
+            event.event(EventType.CODE_TO_TOKEN);
+            event.detail(Details.CODE_ID, code);
+            event.success();
+            logger.infof("AAuth consent flow: Skipping consent screen (already consented this session) agent=%s resource=%s user=%s",
+                    tokenData.getAgentId(), tokenData.getResourceId(), user.getUsername());
+            return redirectWithCode(redirectUri, code, state);
+        }
+
         // User is authenticated - show consent screen
-        logger.infof("AAuth consent flow: User authenticated via SSO cookie, showing consent screen (agent=%s, resource=%s, user=%s)", 
+        logger.infof("AAuth consent flow: User authenticated via SSO cookie, showing consent screen (agent=%s, resource=%s, user=%s)",
                 tokenData.getAgentId(), tokenData.getResourceId(), user.getUsername());
         return showConsentScreen(tokenData, user, userSession);
     }
@@ -427,6 +453,70 @@ public class AAuthAuthorizationEndpoint {
         }
         String[] parts = requestToken.split("\\.", 3);
         return parts.length > 0 ? parts[0] : requestToken;
+    }
+
+    /**
+     * Session note key for AAuth consent: one key per (agentId, resourceId).
+     * Value is comma-separated list of consented scope names.
+     */
+    private static String consentNoteKey(String agentId, String resourceId) {
+        return SESSION_NOTE_AAUTH_CONSENT_PREFIX + agentId + "|" + resourceId;
+    }
+
+    /**
+     * Record that the user has consented to the given agent, resource, and scopes for this session.
+     * Merges with any existing consent for the same agent+resource (adds new scopes).
+     */
+    private void addSessionConsent(UserSessionModel userSession, String agentId, String resourceId, String scopeString) {
+        if (agentId == null || resourceId == null) {
+            return;
+        }
+        Set<String> scopes = parseScopes(scopeString);
+        if (scopes.isEmpty()) {
+            return;
+        }
+        String key = consentNoteKey(agentId, resourceId);
+        String existing = userSession.getNote(key);
+        if (existing != null && !existing.isEmpty()) {
+            scopes.addAll(Arrays.asList(existing.split(",")));
+        }
+        userSession.setNote(key, scopes.stream().sorted().collect(Collectors.joining(",")));
+        logger.debugf("AAuth session consent: recorded for agent=%s resource=%s scopes=%s", agentId, resourceId, scopes);
+    }
+
+    /**
+     * Returns true if the user session already has consent for this agent, resource, and at least the requested scopes.
+     * Used to skip the consent screen when the user already consented in this session.
+     */
+    private boolean hasSessionConsent(UserSessionModel userSession, String agentId, String resourceId, String scopeString) {
+        if (agentId == null || resourceId == null) {
+            return false;
+        }
+        Set<String> requested = parseScopes(scopeString);
+        if (requested.isEmpty()) {
+            return true;
+        }
+        String key = consentNoteKey(agentId, resourceId);
+        String value = userSession.getNote(key);
+        if (value == null || value.isEmpty()) {
+            return false;
+        }
+        Set<String> consented = new LinkedHashSet<>(Arrays.asList(value.split(",")));
+        boolean covered = consented.containsAll(requested);
+        if (covered) {
+            logger.debugf("AAuth session consent: skipping consent screen (already consented this session) agent=%s resource=%s", agentId, resourceId);
+        }
+        return covered;
+    }
+
+    private static Set<String> parseScopes(String scopeString) {
+        if (scopeString == null || scopeString.trim().isEmpty()) {
+            return Collections.emptySet();
+        }
+        return Arrays.stream(scopeString.trim().split("\\s+"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     private void checkSsl() {
