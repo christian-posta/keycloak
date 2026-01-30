@@ -76,6 +76,12 @@ public class JWTSchemeTest {
                         if (args.length > 0 && args[0] == HttpClientProvider.class) {
                             return createMockHttpClientProvider();
                         }
+                        if (args.length > 1 && args[0] == org.keycloak.crypto.SignatureProvider.class) {
+                            String algorithm = (String) args[1];
+                            if ("Ed25519".equals(algorithm) || "EdDSA".equals(algorithm)) {
+                                return createMockSignatureProvider();
+                            }
+                        }
                         return null;
                     case "setAttribute":
                         if (args.length >= 2) {
@@ -87,11 +93,65 @@ public class JWTSchemeTest {
                             return sessionAttributes.get(args[0]);
                         }
                         return null;
+                    case "getContext":
+                        // Return null context - AuthTokenValidator handles this gracefully
+                        return null;
                     default:
                         return null;
                 }
             }
         );
+    }
+
+    private org.keycloak.crypto.SignatureProvider createMockSignatureProvider() {
+        return new org.keycloak.crypto.SignatureProvider() {
+            @Override
+            public org.keycloak.crypto.SignatureSignerContext signer() throws org.keycloak.crypto.SignatureException {
+                return null;
+            }
+            
+            @Override
+            public org.keycloak.crypto.SignatureSignerContext signer(KeyWrapper key) throws org.keycloak.crypto.SignatureException {
+                return null;
+            }
+            
+            @Override
+            public org.keycloak.crypto.SignatureVerifierContext verifier(String kid) throws org.keycloak.common.VerificationException {
+                return null;
+            }
+            
+            @Override
+            public org.keycloak.crypto.SignatureVerifierContext verifier(KeyWrapper key) throws org.keycloak.common.VerificationException {
+                return new org.keycloak.crypto.SignatureVerifierContext() {
+                    @Override
+                    public String getKid() {
+                        return key.getKid();
+                    }
+                    
+                    @Override
+                    public String getAlgorithm() {
+                        return key.getAlgorithm();
+                    }
+                    
+                    @Override
+                    public boolean verify(byte[] data, byte[] signature) throws org.keycloak.common.VerificationException {
+                        try {
+                            java.security.Signature sig = java.security.Signature.getInstance("Ed25519");
+                            sig.initVerify((java.security.PublicKey) key.getPublicKey());
+                            sig.update(data);
+                            return sig.verify(signature);
+                        } catch (Exception e) {
+                            throw new org.keycloak.common.VerificationException("Signature verification failed", e);
+                        }
+                    }
+                };
+            }
+            
+            @Override
+            public boolean isAsymmetricAlgorithm() {
+                return true;
+            }
+        };
     }
 
     private HttpClientProvider createMockHttpClientProvider() {
@@ -271,6 +331,12 @@ public class JWTSchemeTest {
         String authServerId = "https://auth.example.com";
         String agentId = "https://agent.example.com";
         String resourceId = "https://resource.example.com";
+        
+        // Set up mock JWKS response for auth server (for JWT signature verification)
+        String authServerJwksUri = authServerId + "/protocol/openid-connect/certs";
+        String signingKid = org.keycloak.common.util.KeyUtils.createKeyId(signingKeyPair.getPublic());
+        String authServerJwksJson = createJWKSJson(signingKeyPair.getPublic(), signingKid);
+        httpResponses.put(authServerJwksUri, authServerJwksJson);
         
         // Create auth token
         String authToken = createAuthToken(signingKeyPair, cnfKeyPair, authServerId, agentId, resourceId);
@@ -511,6 +577,12 @@ public class JWTSchemeTest {
         String agentId = "https://agent.example.com";
         String resourceId = "https://resource.example.com";
         
+        // Set up mock JWKS response for auth server (for JWT signature verification)
+        String kid = org.keycloak.common.util.KeyUtils.createKeyId(signingKeyPair.getPublic());
+        String authServerJwksUri = authServerId + "/protocol/openid-connect/certs";
+        String authServerJwksJson = createJWKSJson(signingKeyPair.getPublic(), kid);
+        httpResponses.put(authServerJwksUri, authServerJwksJson);
+        
         // Create token without cnf.jwk
         JsonWebToken token = new JsonWebToken();
         token.issuer(authServerId);
@@ -522,7 +594,6 @@ public class JWTSchemeTest {
         token.setOtherClaims("agent", agentId);
         // Don't add cnf claim
         
-        String kid = org.keycloak.common.util.KeyUtils.createKeyId(signingKeyPair.getPublic());
         KeyWrapper keyWrapper = new KeyWrapper();
         keyWrapper.setAlgorithm(Algorithm.EdDSA);
         keyWrapper.setKid(kid);
@@ -544,7 +615,7 @@ public class JWTSchemeTest {
             scheme.discoverPublicKey(keyParser);
             fail("Should throw SignatureVerificationException when cnf.jwk is missing");
         } catch (SignatureVerificationException e) {
-            assertTrue("Error should mention cnf.jwk", 
+            assertTrue("Error should mention cnf.jwk or cnf", 
                 e.getMessage().contains("cnf.jwk") || e.getMessage().contains("cnf"));
         } catch (SignatureKeyParseException e) {
             // Also acceptable if parsing fails

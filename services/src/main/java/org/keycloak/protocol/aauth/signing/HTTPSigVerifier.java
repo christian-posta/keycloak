@@ -111,7 +111,12 @@ public class HTTPSigVerifier {
                 "' but Signature has '" + signatureLabel + "'");
         }
 
-        // 5. Discover public key based on scheme
+        // 5. Store body bytes in session for schemes that need to parse form data (e.g., token exchange)
+        if (bodyBytes != null) {
+            session.setAttribute("aauth.request.body.bytes", bodyBytes);
+        }
+
+        // 6. Discover public key based on scheme
         SignatureScheme scheme = SignatureSchemeFactory.create(session, keyParser);
         PublicKey publicKey;
         try {
