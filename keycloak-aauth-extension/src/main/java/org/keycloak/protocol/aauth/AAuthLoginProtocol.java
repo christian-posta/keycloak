@@ -49,7 +49,6 @@ public class AAuthLoginProtocol implements LoginProtocol {
     private static final String REQUEST_TOKEN_PARAM = "request_token";
     private static final String REDIRECT_URI_PARAM = "redirect_uri";
     private static final String STATE_PARAM = "state";
-    private static final String CODE_PARAM = "code";
 
     private KeycloakSession session;
     private RealmModel realm;
@@ -130,20 +129,24 @@ public class AAuthLoginProtocol implements LoginProtocol {
             redirectUri = tokenData.getRedirectUri();
         }
 
-        // Generate authorization code
-        String code = generateAuthorizationCode(currentSession, tokenData, userSession);
-        
-        // Redirect back to agent with authorization code
-        UriBuilder uriBuilder = UriBuilder.fromUri(redirectUri);
-        uriBuilder.queryParam(CODE_PARAM, code);
-        if (state != null) {
-            uriBuilder.queryParam(STATE_PARAM, state);
+        // Redirect back to /agent/auth to show consent screen (user is now authenticated).
+        // Do NOT generate auth code yet - the consent screen must be shown first.
+        // After user grants consent on the consent screen, AAuthAuthorizationEndpoint
+        // will generate the code and redirect to the agent.
+        java.net.URI baseUri = currentSession.getContext().getUri().getBaseUri();
+        UriBuilder agentAuthUri = UriBuilder.fromUri(baseUri)
+                .path("realms/{realm}/protocol/aauth/agent/auth")
+                .resolveTemplate("realm", realm.getName())
+                .queryParam(REQUEST_TOKEN_PARAM, requestToken)
+                .queryParam(REDIRECT_URI_PARAM, redirectUri);
+        if (state != null && !state.isEmpty()) {
+            agentAuthUri.queryParam(STATE_PARAM, state);
         }
         
-        logger.debugf("Redirecting to agent with authorization code for agent: %s, resource: %s", 
+        logger.debugf("Redirecting to consent screen (agent/auth) for agent: %s, resource: %s", 
                 tokenData.getAgentId(), tokenData.getResourceId());
         
-        return Response.seeOther(uriBuilder.build()).build();
+        return Response.seeOther(agentAuthUri.build()).build();
     }
 
     @Override
@@ -240,31 +243,6 @@ public class AAuthLoginProtocol implements LoginProtocol {
     @Override
     public void close() {
         // No cleanup needed
-    }
-
-    private String generateAuthorizationCode(KeycloakSession session, AAuthRequestToken tokenData, UserSessionModel userSession) {
-        // Use the same logic as AAuthAuthorizationEndpoint
-        org.keycloak.protocol.aauth.storage.AAuthAuthorizationCode codeData = 
-            new org.keycloak.protocol.aauth.storage.AAuthAuthorizationCode(
-                java.util.UUID.randomUUID().toString(),
-                org.keycloak.common.util.Time.currentTime() + 60, // 60 seconds
-                tokenData.getScope(),
-                tokenData.getRedirectUri(),
-                userSession.getId(),
-                tokenData.getId(),
-                tokenData.getAgentId(),
-                tokenData.getAgentJkt(),
-                tokenData.getSignatureScheme(),
-                tokenData.getResourceId()
-            );
-        
-        // Store code
-        session.singleUseObjects().put(codeData.getId(), 60, codeData.serialize());
-        
-        // Return opaque code
-        String hash = org.keycloak.common.util.Base64Url.encode(
-            (codeData.getId() + ":" + userSession.getId()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return codeData.getId() + "." + userSession.getId() + "." + hash;
     }
 }
 
