@@ -25,10 +25,11 @@ Toggle the **Enable AAuth Protocol** switch to enable or disable the AAuth proto
 
 When enabled, the following endpoints become available:
 
-* **Well-Known Endpoint**: `{server-url}/realms/{realm}/.well-known/aauth-configuration`
-* **Token Endpoint**: `{server-url}/realms/{realm}/protocol/aauth/token`
+* **Well-Known Endpoint**: `{server-url}/realms/{realm}/.well-known/aauth-issuer`
+* **Agent Token Endpoint**: `{server-url}/realms/{realm}/protocol/aauth/agent/token`
+* **Agent Auth Endpoint**: `{server-url}/realms/{realm}/protocol/aauth/agent/auth`
 
-NOTE: The well-known endpoint provides metadata for agents to discover AAuth capabilities and endpoints.
+NOTE: The well-known endpoint provides metadata for agents to discover AAuth capabilities and endpoints. The agent token endpoint supports request types: `auth` (direct grant), `code` (authorization code exchange), `refresh` (token refresh), and `exchange` (token exchange for multi-hop delegation).
 
 ==== Trusted Issuers
 
@@ -119,6 +120,39 @@ This prevents infinite loops in complex delegation scenarios. Each token exchang
 
 Example: A → B → C → D would have depth 3.
 
+[[aauth-consent-config]]
+==== User Consent Configuration
+
+When an agent requests an auth token with `request_type=auth`, the auth server evaluates the requested scopes to decide whether to return a `request_token` (requiring user consent) or an `auth_token` (direct grant). You can configure which scopes trigger the user consent flow via realm attributes.
+
+===== Consent Realm Attributes
+
+[cols="2,1,2"]
+|===
+|Attribute |Type |Description
+
+|`aauth.consent.required.scopes`
+|JSON array
+|Exact scope names that require user consent (e.g. `["openid","profile","email"]`)
+
+|`aauth.consent.required.scope.prefixes`
+|JSON array
+|Scope name prefixes that require consent (e.g. `["user.","profile."]`)
+|===
+
+===== Default Behavior
+
+When both attributes are **not set** (missing or empty), the system uses defaults:
+
+* **Exact matches**: `openid`, `profile`, `email`
+* **Prefixes**: `user.`, `profile.`, `email.`
+
+Once you set either attribute (even to `[]`), the system uses **only** your configured lists. To restore defaults, remove the attributes entirely.
+
+===== Session-Scoped Consent
+
+Consent is remembered for the current Keycloak session. Subsequent flows for the same agent and resource with the same or subset of scopes skip the consent screen. To force consent every time, the agent can add `prompt=consent` to the authorization URL.
+
 ==== Configuration via Realm Attributes
 
 AAuth settings can also be configured programmatically via realm attributes:
@@ -162,6 +196,14 @@ AAuth settings can also be configured programmatically via realm attributes:
 |`aauth.exchange.max.depth`
 |integer
 |Max delegation depth
+
+|`aauth.consent.required.scopes`
+|JSON array
+|Scope names that require user consent
+
+|`aauth.consent.required.scope.prefixes`
+|JSON array
+|Scope name prefixes that require user consent
 |===
 
 Example using Admin CLI:

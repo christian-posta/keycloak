@@ -63,15 +63,17 @@ When tokens are exchanged, the delegation chain is preserved in `act` (actor) cl
 
 ==== Protocol Flows
 
-===== Direct Grant Flow
+===== Direct Grant Flow (request_type=auth)
 
 The direct grant flow allows agents to request authorization directly:
 
-. Agent sends a token request to the Auth Server with an HTTP Message Signature
-. Auth Server verifies the signature and checks policies
-. Auth Server issues an `auth_token` to the agent
+. Agent sends a signed token request to the agent token endpoint with `request_type=auth`
+. Auth Server verifies the HTTP Message Signature and checks policies
+. Auth Server issues either an `auth_token` (direct grant) or a `request_token` (user consent required)
 . Agent uses the `auth_token` to access resources (also with HTTP Message Signature)
 . Resource verifies the signatures and returns a response
+
+When the auth server returns a `request_token`, the agent redirects the user to the agent auth endpoint (`/protocol/aauth/agent/auth`) for authentication and consent. After consent, the user is redirected back with an authorization code, which the agent exchanges for tokens using `request_type=code`.
 
 ===== Token Exchange Flow
 
@@ -100,6 +102,8 @@ To enable AAuth for your realm:
 . Enable the AAuth protocol
 . Configure agent policies and token settings
 . Set up trusted issuers for cross-server token exchange (optional)
+
+Supported request types at the agent token endpoint: `auth` (direct grant or request_token), `code` (authorization code exchange), `refresh` (token refresh), and `exchange` (token exchange for multi-hop delegation).
 
 See the following sections for detailed configuration:
 

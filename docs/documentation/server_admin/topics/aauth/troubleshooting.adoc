@@ -162,7 +162,7 @@ This guide helps diagnose and resolve common issues with the AAuth protocol.
 
 1. **Direct grant instead of request_token**: If your agent requests scopes that don't require consent (e.g. `data.read`), the auth server returns an `auth_token` directly. No consent flow occurs.
    * Check: Does your token response contain `request_token` or `auth_token`?
-   * Fix: Request consent-required scopes (e.g. `profile`, `email`, `openid`) or configure `aauth.consent.required.scopes` / `aauth.consent.required.scope.prefixes` realm attributes. See xref:aauth-consent-config[AAuth Consent Configuration].
+   * Fix: Request consent-required scopes (e.g. `profile`, `email`, `openid`) or configure `aauth.consent.required.scopes` / `aauth.consent.required.scope.prefixes` realm attributes. See <<aauth-consent-config,User Consent Configuration>>.
 
 2. **Agent not redirecting to authorization endpoint**: After receiving a `request_token`, the agent must redirect the user to `{base_url}/realms/{realm}/protocol/aauth/agent/auth?request_token=...&redirect_uri=...&state=...`
    * Check: Is your app performing this redirect after getting a request_token?
@@ -234,7 +234,7 @@ quarkus.log.category."org.keycloak.protocol.aauth".level=INFO
 
 [source,bash]
 ----
-curl -s https://your-server/realms/your-realm/.well-known/aauth-configuration | jq
+curl -s https://your-server/realms/your-realm/.well-known/aauth-issuer | jq
 ----
 
 Expected response:
@@ -243,7 +243,8 @@ Expected response:
 ----
 {
   "issuer": "https://your-server/realms/your-realm",
-  "token_endpoint": "https://your-server/realms/your-realm/protocol/aauth/token",
+  "agent_token_endpoint": "https://your-server/realms/your-realm/protocol/aauth/agent/token",
+  "agent_auth_endpoint": "https://your-server/realms/your-realm/protocol/aauth/agent/auth",
   "jwks_uri": "https://your-server/realms/your-realm/protocol/aauth/certs",
   "signature_algorithms_supported": ["Ed25519", "RS256", ...],
   ...

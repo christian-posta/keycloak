@@ -18,7 +18,7 @@ The federation flow involves the following steps:
 . Agent requests a token from Auth Server A
 . Auth Server A issues an `auth_token` with itself as the issuer
 . Agent sends a token exchange request to Auth Server B with the upstream token and a resource token
-. Auth Server B fetches the `.well-known/aauth-configuration` from Auth Server A
+. Auth Server B fetches the `/.well-known/aauth-issuer` metadata from Auth Server A
 . Auth Server B fetches the JWKS from Auth Server A
 . Auth Server B validates the `auth_token` signature using the fetched JWKS
 . Auth Server B issues a new `auth_token` (issuer: Server B) with an `act` claim showing the delegation chain
@@ -59,7 +59,7 @@ Test that the trusting server can reach the trusted server's metadata:
 [source,bash]
 ----
 # From Server B, fetch Server A's metadata
-curl https://server-a.example.com/realms/{realm}/.well-known/aauth-configuration
+curl https://server-a.example.com/realms/{realm}/.well-known/aauth-issuer
 ----
 
 The response should include:
@@ -82,7 +82,7 @@ The response should include:
 [source,bash]
 ----
 # Request with HTTPSig signature and upstream token
-POST /realms/{realm}/protocol/aauth/token HTTP/1.1
+POST /realms/{realm}/protocol/aauth/agent/token HTTP/1.1
 Host: server-b.example.com
 Content-Type: application/x-www-form-urlencoded
 Signature-Key: sig=jwt;jwt=<upstream_auth_token>
