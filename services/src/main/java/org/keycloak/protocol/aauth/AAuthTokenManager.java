@@ -23,12 +23,10 @@ import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
 import org.keycloak.crypto.SignatureProvider;
 import org.keycloak.crypto.SignatureSignerContext;
+import org.keycloak.crypto.SignatureVerifierContext;
 import org.keycloak.jose.jwk.JWK;
 import org.keycloak.jose.jwk.JWKBuilder;
 import org.keycloak.jose.jws.JWSBuilder;
-import org.keycloak.TokenVerifier;
-import org.keycloak.common.VerificationException;
-import org.keycloak.crypto.SignatureVerifierContext;
 import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.jose.jws.JWSInputException;
 import org.keycloak.models.KeycloakSession;
@@ -38,6 +36,7 @@ import org.keycloak.models.UserSessionModel;
 import org.keycloak.representations.AAuthActorClaim;
 import org.keycloak.representations.AAuthRefreshToken;
 import org.keycloak.representations.AAuthToken;
+import org.keycloak.representations.JsonWebToken;
 import org.keycloak.services.Urls;
 import org.keycloak.util.JWKSUtils;
 
@@ -171,6 +170,104 @@ public class AAuthTokenManager {
     }
 
     /**
+     * Refresh by re-presenting an expired auth token (per updated AAuth spec Section 11.6).
+     * Verifies the JWT signature (ignoring exp), verifies agent key binding via cnf.jwk,
+     * then issues a new auth token with the same claims.
+     *
+     * @param realm The realm
+     * @param expiredAuthTokenJwt The expired auth token JWT string
+     * @param agentPublicKey The current agent's public key (must match cnf.jwk in the expired token)
+     * @return New signed auth token JWT
+     */
+    @SuppressWarnings("unchecked")
+    public String refreshFromExpiredAuthToken(RealmModel realm, String expiredAuthTokenJwt,
+            PublicKey agentPublicKey) throws Exception {
+
+        JWSInput jws = new JWSInput(expiredAuthTokenJwt);
+
+        // Verify type
+        String typ = jws.getHeader().getType();
+        if (!"auth+jwt".equals(typ)) {
+            throw new Exception("Invalid token type for refresh, expected auth+jwt, got: " + typ);
+        }
+
+        // Verify JWT signature (same logic as auth token validation)
+        String kid = jws.getHeader().getKeyId();
+        String algorithm = jws.getHeader().getRawAlgorithm();
+        String normalizedAlg = "EdDSA".equals(algorithm) ? "Ed25519" : algorithm;
+
+        KeyWrapper signingKey = session.keys().getKeysStream(realm)
+                .filter(k -> k.getStatus().isEnabled())
+                .filter(k -> KeyUse.SIG.equals(k.getUse()))
+                .filter(k -> normalizedAlg.equals(k.getAlgorithm()))
+                .filter(k -> kid == null || kid.equals(k.getKid()))
+                .findFirst().orElse(null);
+
+        if (signingKey == null) {
+            throw new Exception("No key found to verify expired auth token: kid=" + kid + " alg=" + algorithm);
+        }
+
+        SignatureProvider sigProv = session.getProvider(SignatureProvider.class, normalizedAlg);
+        if (sigProv == null) {
+            throw new Exception("Unsupported signature algorithm: " + algorithm);
+        }
+
+        SignatureVerifierContext verifier = sigProv.verifier(signingKey);
+        if (!verifier.verify(jws.getEncodedSignatureInput().getBytes("UTF-8"), jws.getSignature())) {
+            throw new Exception("Expired auth token signature verification failed");
+        }
+
+        // Parse claims (ignoring exp)
+        JsonWebToken token = jws.readJsonContent(JsonWebToken.class);
+
+        // Verify cnf.jwk matches the current agent's public key
+        String currentJkt = calculateAgentJkt(agentPublicKey);
+        Map<String, Object> otherClaims = token.getOtherClaims();
+        if (otherClaims != null && otherClaims.get("cnf") instanceof Map) {
+            Map<String, Object> cnf = (Map<String, Object>) otherClaims.get("cnf");
+            Object jwkObj = cnf.get("jwk");
+            if (jwkObj instanceof Map) {
+                try {
+                    String jwkJson = org.keycloak.util.JsonSerialization.writeValueAsString(jwkObj);
+                    JWK jwk = org.keycloak.util.JsonSerialization.readValue(jwkJson, JWK.class);
+                    String tokenJkt = JWKSUtils.computeThumbprint(jwk);
+                    if (!currentJkt.equals(tokenJkt)) {
+                        throw new Exception("Agent key mismatch: cnf.jwk in token does not match current agent key");
+                    }
+                } catch (Exception e) {
+                    if (e.getMessage() != null && e.getMessage().startsWith("Agent key mismatch")) throw e;
+                    logger.warnf(e, "Could not verify cnf.jwk during token refresh");
+                }
+            }
+        }
+
+        // Extract claims
+        String agentId = null;
+        String agentDelegate = null;
+        String resourceId = token.getAudience() != null && token.getAudience().length > 0
+                ? token.getAudience()[0] : null;
+        String scope = null;
+        String subject = token.getSubject();
+
+        if (otherClaims != null) {
+            agentId = otherClaims.get("agent") instanceof String ? (String) otherClaims.get("agent") : null;
+            agentDelegate = otherClaims.get("agent_delegate") instanceof String
+                    ? (String) otherClaims.get("agent_delegate") : null;
+            scope = otherClaims.get("scope") instanceof String ? (String) otherClaims.get("scope") : null;
+        }
+
+        if (agentId == null) agentId = resourceId; // self-access case
+
+        // Issue new token with same claims
+        UserModel user = null;
+        if (subject != null) {
+            user = session.users().getUserById(realm, subject);
+        }
+
+        return createAuthToken(realm, agentId, agentDelegate, agentPublicKey, resourceId, scope, user);
+    }
+
+    /**
      * Get token expiration in seconds.
      */
     public long getTokenExpiration(RealmModel realm) {
@@ -181,21 +278,12 @@ public class AAuthTokenManager {
         return tokenLifespan;
     }
 
-    /**
-     * Create a refresh token for the given agent and resource.
-     * 
-     * @param realm The realm
-     * @param agentId Agent identifier (HTTPS URL or pseudonymous)
-     * @param agentJkt Agent JWK thumbprint
-     * @param agentDelegate Agent delegate identifier (optional)
-     * @param resourceId Resource identifier
-     * @param scope Space-separated scopes (optional)
-     * @param user User model (optional, for user authorization)
-     * @param agentPublicKey Agent's public signing key (for cnf.jwk)
-     * @return Signed refresh token JWT string
-     */
-    public String createRefreshToken(RealmModel realm, String agentId, String agentJkt, 
-            String agentDelegate, String resourceId, String scope, UserModel user, 
+    // ---- Deprecated refresh token methods kept for source compatibility ----
+    // These are no longer called; token refresh is done via refreshFromExpiredAuthToken().
+
+    @Deprecated
+    public String createRefreshToken(RealmModel realm, String agentId, String agentJkt,
+            String agentDelegate, String resourceId, String scope, UserModel user,
             PublicKey agentPublicKey) {
         
         // Create AAuthRefreshToken instance
@@ -271,83 +359,17 @@ public class AAuthTokenManager {
         return signedToken;
     }
 
-    /**
-     * Validate and parse a refresh token.
-     * 
-     * @param realm The realm
-     * @param encodedRefreshToken Encoded refresh token JWT string
-     * @return Parsed and validated refresh token
-     * @throws VerificationException If token is invalid
-     */
-    public AAuthRefreshToken validateRefreshToken(RealmModel realm, String encodedRefreshToken) 
-            throws VerificationException {
+    @Deprecated
+    public AAuthRefreshToken validateRefreshToken(RealmModel realm, String encodedRefreshToken)
+            throws org.keycloak.common.VerificationException {
         
-        try {
-            // Parse JWT
-            JWSInput jwsInput = new JWSInput(encodedRefreshToken);
-            
-            // Verify token type
-            if (!"refresh+jwt".equals(jwsInput.getHeader().getType())) {
-                throw new VerificationException("Invalid refresh token type");
-            }
-            
-            // Get algorithm and key ID from token header
-            String algorithm = jwsInput.getHeader().getAlgorithm().name();
-            String kid = jwsInput.getHeader().getKeyId();
-            
-            // Get signature verifier context from realm keys
-            SignatureProvider signatureProvider = session.getProvider(SignatureProvider.class, algorithm);
-            if (signatureProvider == null) {
-                throw new VerificationException("Unsupported signature algorithm: " + algorithm);
-            }
-            
-            SignatureVerifierContext verifierContext = signatureProvider.verifier(kid);
-            
-            // Verify signature and claims
-            String issuer = Urls.realmIssuer(session.getContext().getUri().getBaseUri(), realm.getName());
-            TokenVerifier<AAuthRefreshToken> verifier = TokenVerifier.create(encodedRefreshToken, AAuthRefreshToken.class)
-                    .withChecks(
-                            TokenVerifier.IS_ACTIVE,
-                            new TokenVerifier.RealmUrlCheck(issuer)
-                    )
-                    .verifierContext(verifierContext);
-            
-            AAuthRefreshToken refreshToken = verifier.verify().getToken();
-            
-            return refreshToken;
-            
-        } catch (JWSInputException e) {
-            throw new VerificationException("Invalid refresh token format", e);
-        }
+        throw new org.keycloak.common.VerificationException("Refresh tokens are no longer supported. Use refreshFromExpiredAuthToken() instead.");
     }
 
-    /**
-     * Generate a new auth token from a refresh token.
-     * 
-     * @param realm The realm
-     * @param refreshToken Validated refresh token
-     * @param agentPublicKey Current agent's public key (for cnf.jwk in new token)
-     * @return New signed auth token JWT string
-     */
-    public String refreshAuthToken(RealmModel realm, AAuthRefreshToken refreshToken, 
+    @Deprecated
+    public String refreshAuthToken(RealmModel realm, AAuthRefreshToken refreshToken,
             PublicKey agentPublicKey) {
-        
-        // Get user session if subject is present
-        UserModel user = null;
-        if (refreshToken.getSubject() != null && refreshToken.getSessionId() != null) {
-            UserSessionModel userSession = session.sessions().getUserSession(realm, refreshToken.getSessionId());
-            if (userSession != null) {
-                user = userSession.getUser();
-            }
-        }
-        
-        // Create new auth token with same parameters as refresh token
-        String agentId = refreshToken.getAgent();
-        String agentDelegate = refreshToken.getAgentDelegate();
-        String resourceId = refreshToken.getResourceId();
-        String scope = refreshToken.getScope();
-        
-        return createAuthToken(realm, agentId, agentDelegate, agentPublicKey, resourceId, scope, user);
+        throw new UnsupportedOperationException("Refresh tokens are no longer supported. Use refreshFromExpiredAuthToken() instead.");
     }
 
     /**

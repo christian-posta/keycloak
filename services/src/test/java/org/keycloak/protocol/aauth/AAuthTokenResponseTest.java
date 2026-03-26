@@ -24,7 +24,7 @@ import org.keycloak.util.JsonSerialization;
 import static org.junit.Assert.*;
 
 /**
- * Unit tests for AAuthTokenResponse
+ * Unit tests for AAuthTokenResponse (updated for spec revision: no token_type, refresh_token, request_token)
  */
 public class AAuthTokenResponseTest {
 
@@ -33,33 +33,9 @@ public class AAuthTokenResponseTest {
         AAuthTokenResponse response = new AAuthTokenResponse();
         response.setAuthToken("eyJhbGciOiJFZERTQSJ9...");
         response.setExpiresIn(3600L);
-        response.setTokenType("AAuth");
 
         assertEquals("eyJhbGciOiJFZERTQSJ9...", response.getAuthToken());
         assertEquals(3600L, response.getExpiresIn());
-        assertEquals("AAuth", response.getTokenType());
-    }
-
-    @Test
-    public void testResponseWithRefreshToken() {
-        AAuthTokenResponse response = new AAuthTokenResponse();
-        response.setAuthToken("token123");
-        response.setRefreshToken("refresh123");
-        response.setExpiresIn(3600L);
-
-        assertEquals("token123", response.getAuthToken());
-        assertEquals("refresh123", response.getRefreshToken());
-    }
-
-    @Test
-    public void testResponseWithRequestToken() {
-        AAuthTokenResponse response = new AAuthTokenResponse();
-        response.setAuthToken("token123");
-        response.setRequestToken("request123");
-        response.setExpiresIn(3600L);
-
-        assertEquals("token123", response.getAuthToken());
-        assertEquals("request123", response.getRequestToken());
     }
 
     @Test
@@ -79,19 +55,19 @@ public class AAuthTokenResponseTest {
         AAuthTokenResponse response = new AAuthTokenResponse();
         response.setAuthToken("eyJhbGciOiJFZERTQSJ9...");
         response.setExpiresIn(3600L);
-        response.setTokenType("AAuth");
 
         String json = JsonSerialization.writeValueAsString(response);
         assertNotNull(json);
         assertTrue(json.contains("\"auth_token\""));
         assertTrue(json.contains("\"expires_in\":3600"));
-        assertTrue(json.contains("\"token_type\":\"AAuth\""));
+        // token_type, refresh_token, request_token are no longer in the response
+        assertFalse(json.contains("token_type"));
+        assertFalse(json.contains("refresh_token"));
+        assertFalse(json.contains("request_token"));
 
         // Deserialize back
         AAuthTokenResponse deserialized = JsonSerialization.readValue(json, AAuthTokenResponse.class);
         assertEquals(response.getAuthToken(), deserialized.getAuthToken());
         assertEquals(response.getExpiresIn(), deserialized.getExpiresIn());
-        assertEquals(response.getTokenType(), deserialized.getTokenType());
     }
 }
-

@@ -19,12 +19,10 @@ package org.keycloak.representations;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.util.List;
-
 /**
- * AAuth Issuer Metadata as defined in AAuth specification Section 8.2.
- * 
- * Published at `/.well-known/aauth-issuer` endpoint.
+ * AAuth Issuer Metadata as defined in the updated AAuth specification.
+ *
+ * Published at {@code /.well-known/aauth-issuer.json}.
  */
 public class AAuthIssuerMetadata {
 
@@ -34,75 +32,21 @@ public class AAuthIssuerMetadata {
     @JsonProperty("jwks_uri")
     private String jwksUri;
 
-    @JsonProperty("agent_token_endpoint")
-    private String agentTokenEndpoint;
+    @JsonProperty("token_endpoint")
+    private String tokenEndpoint;
 
-    @JsonProperty("agent_auth_endpoint")
-    private String agentAuthEndpoint;
+    @JsonProperty("interaction_endpoint")
+    private String interactionEndpoint;
 
-    @JsonProperty("agent_signing_algs_supported")
-    private List<String> agentSigningAlgsSupported;
+    public String getIssuer() { return issuer; }
+    public void setIssuer(String issuer) { this.issuer = issuer; }
 
-    @JsonProperty("request_types_supported")
-    private List<String> requestTypesSupported;
+    public String getJwksUri() { return jwksUri; }
+    public void setJwksUri(String jwksUri) { this.jwksUri = jwksUri; }
 
-    @JsonProperty("scopes_supported")
-    private List<String> scopesSupported;
+    public String getTokenEndpoint() { return tokenEndpoint; }
+    public void setTokenEndpoint(String tokenEndpoint) { this.tokenEndpoint = tokenEndpoint; }
 
-    public String getIssuer() {
-        return issuer;
-    }
-
-    public void setIssuer(String issuer) {
-        this.issuer = issuer;
-    }
-
-    public String getJwksUri() {
-        return jwksUri;
-    }
-
-    public void setJwksUri(String jwksUri) {
-        this.jwksUri = jwksUri;
-    }
-
-    public String getAgentTokenEndpoint() {
-        return agentTokenEndpoint;
-    }
-
-    public void setAgentTokenEndpoint(String agentTokenEndpoint) {
-        this.agentTokenEndpoint = agentTokenEndpoint;
-    }
-
-    public String getAgentAuthEndpoint() {
-        return agentAuthEndpoint;
-    }
-
-    public void setAgentAuthEndpoint(String agentAuthEndpoint) {
-        this.agentAuthEndpoint = agentAuthEndpoint;
-    }
-
-    public List<String> getAgentSigningAlgsSupported() {
-        return agentSigningAlgsSupported;
-    }
-
-    public void setAgentSigningAlgsSupported(List<String> agentSigningAlgsSupported) {
-        this.agentSigningAlgsSupported = agentSigningAlgsSupported;
-    }
-
-    public List<String> getRequestTypesSupported() {
-        return requestTypesSupported;
-    }
-
-    public void setRequestTypesSupported(List<String> requestTypesSupported) {
-        this.requestTypesSupported = requestTypesSupported;
-    }
-
-    public List<String> getScopesSupported() {
-        return scopesSupported;
-    }
-
-    public void setScopesSupported(List<String> scopesSupported) {
-        this.scopesSupported = scopesSupported;
-    }
+    public String getInteractionEndpoint() { return interactionEndpoint; }
+    public void setInteractionEndpoint(String interactionEndpoint) { this.interactionEndpoint = interactionEndpoint; }
 }
-

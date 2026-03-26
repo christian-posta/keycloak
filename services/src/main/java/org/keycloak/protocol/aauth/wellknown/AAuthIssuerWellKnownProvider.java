@@ -19,7 +19,6 @@ package org.keycloak.protocol.aauth.wellknown;
 
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
-import org.keycloak.protocol.aauth.AAuthProtocolService;
 import org.keycloak.representations.AAuthIssuerMetadata;
 import org.keycloak.services.Urls;
 import org.keycloak.services.resources.RealmsResource;
@@ -30,14 +29,21 @@ import jakarta.ws.rs.core.UriBuilder;
 import jakarta.ws.rs.core.UriInfo;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * Well-known provider for AAuth Issuer Metadata.
- * 
- * Implements `/.well-known/aauth-issuer` endpoint per AAuth specification Section 8.2.
+ *
+ * Implements {@code /.well-known/aauth-issuer.json} per updated AAuth specification.
+ *
+ * Metadata shape:
+ * <pre>
+ * {
+ *   "issuer": "https://auth.example/realms/myrealm",
+ *   "token_endpoint": "https://auth.example/realms/myrealm/protocol/aauth/token",
+ *   "interaction_endpoint": "https://auth.example/realms/myrealm/protocol/aauth/interact",
+ *   "jwks_uri": "https://auth.example/realms/myrealm/protocol/aauth/certs"
+ * }
+ * </pre>
  */
 public class AAuthIssuerWellKnownProvider implements WellKnownProvider {
 
@@ -59,103 +65,29 @@ public class AAuthIssuerWellKnownProvider implements WellKnownProvider {
 
         AAuthIssuerMetadata metadata = new AAuthIssuerMetadata();
 
-        // Set issuer
         metadata.setIssuer(Urls.realmIssuer(frontendUriInfo.getBaseUri(), realm.getName()));
 
-        // Set JWKS URI
+        // jwks_uri — backend URL for JWKS
         URI jwksUri = backendUriBuilder.clone()
-                .path(AAuthProtocolService.class, "certs")
+                .path("/certs")
                 .build(realm.getName(), "aauth");
         metadata.setJwksUri(jwksUri.toString());
 
-        // Set agent token endpoint
-        URI agentTokenEndpoint = backendUriBuilder.clone()
-                .path(AAuthProtocolService.class, "agentToken")
+        // token_endpoint — backend URL (agents call this)
+        URI tokenEndpoint = backendUriBuilder.clone()
+                .path("/token")
                 .build(realm.getName(), "aauth");
-        metadata.setAgentTokenEndpoint(agentTokenEndpoint.toString());
+        metadata.setTokenEndpoint(tokenEndpoint.toString());
 
-        // Set agent auth endpoint (Phase 3)
-        URI agentAuthEndpoint = frontendUriBuilder.clone()
-                .path(AAuthProtocolService.class, "agentAuth")
+        // interaction_endpoint — frontend URL (browser interaction)
+        URI interactionEndpoint = frontendUriBuilder.clone()
+                .path("/interact")
                 .build(realm.getName(), "aauth");
-        metadata.setAgentAuthEndpoint(agentAuthEndpoint.toString());
-
-        // Set supported signing algorithms (from realm key providers)
-        metadata.setAgentSigningAlgsSupported(getSupportedSigningAlgorithms(realm));
-
-        // Set supported request types
-        metadata.setRequestTypesSupported(Arrays.asList("auth", "code", "refresh", "exchange"));
-
-        // Set supported scopes (optional - can be enhanced later)
-        metadata.setScopesSupported(getSupportedScopes(realm));
+        metadata.setInteractionEndpoint(interactionEndpoint.toString());
 
         return metadata;
     }
 
-    /**
-     * Get supported signing algorithms from realm key providers.
-     */
-    private List<String> getSupportedSigningAlgorithms(RealmModel realm) {
-        List<String> algorithms = new ArrayList<>();
-        
-        // Check what key types are available in the realm
-        session.keys().getKeysStream(realm)
-                .filter(k -> k.getStatus().isEnabled())
-                .forEach(k -> {
-                    String alg = k.getAlgorithmOrDefault();
-                    if (alg != null && !algorithms.contains(alg)) {
-                        // Map Keycloak algorithm names to AAuth algorithm names
-                        if (alg.startsWith("EdDSA")) {
-                            // Check curve for EdDSA
-                            if (k.getCurve() != null) {
-                                if ("Ed25519".equals(k.getCurve())) {
-                                    if (!algorithms.contains("Ed25519")) {
-                                        algorithms.add("Ed25519");
-                                    }
-                                } else if ("Ed448".equals(k.getCurve())) {
-                                    if (!algorithms.contains("Ed448")) {
-                                        algorithms.add("Ed448");
-                                    }
-                                }
-                            }
-                        } else if (alg.startsWith("RS") || alg.startsWith("PS")) {
-                            if (!algorithms.contains(alg)) {
-                                algorithms.add(alg);
-                            }
-                        } else if (alg.startsWith("ES")) {
-                            if (!algorithms.contains(alg)) {
-                                algorithms.add(alg);
-                            }
-                        }
-                    }
-                });
-
-        // Default algorithms if none found
-        if (algorithms.isEmpty()) {
-            algorithms.add("Ed25519");
-            algorithms.add("RS256");
-            algorithms.add("ES256");
-        }
-
-        return algorithms;
-    }
-
-    /**
-     * Get supported scopes from realm client scopes.
-     */
-    private List<String> getSupportedScopes(RealmModel realm) {
-        List<String> scopes = new ArrayList<>();
-        
-        realm.getClientScopesStream()
-                .filter(scope -> "aauth".equals(scope.getProtocol()))
-                .forEach(scope -> scopes.add(scope.getName()));
-
-        return scopes;
-    }
-
     @Override
-    public void close() {
-        // No cleanup needed
-    }
+    public void close() {}
 }
-
