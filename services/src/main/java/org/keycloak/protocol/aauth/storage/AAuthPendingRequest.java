@@ -37,6 +37,7 @@ public class AAuthPendingRequest {
     public static final String STATUS_COMPLETED = "completed";
     public static final String STATUS_DENIED = "denied";
     public static final String STATUS_EXPIRED = "expired";
+    public static final String STATUS_AWAITING_CLARIFICATION = "awaiting_clarification";
 
     public static final String REQUIRE_INTERACTION = "interaction";
     public static final String REQUIRE_APPROVAL = "approval";
@@ -58,6 +59,9 @@ public class AAuthPendingRequest {
     private String errorDescription;
     private int createdAt;
     private int expiresAt;
+    private boolean clarificationEnabled;
+    private String clarification;
+    private String clarificationResponse;
 
     public AAuthPendingRequest() {}
 
@@ -87,6 +91,15 @@ public class AAuthPendingRequest {
         return STATUS_COMPLETED.equals(status) || STATUS_DENIED.equals(status) || STATUS_EXPIRED.equals(status);
     }
 
+    public boolean isClarificationEnabled() { return clarificationEnabled; }
+    public void setClarificationEnabled(boolean clarificationEnabled) { this.clarificationEnabled = clarificationEnabled; }
+
+    public String getClarification() { return clarification; }
+    public void setClarification(String clarification) { this.clarification = clarification; }
+
+    public String getClarificationResponse() { return clarificationResponse; }
+    public void setClarificationResponse(String clarificationResponse) { this.clarificationResponse = clarificationResponse; }
+
     public Map<String, String> serialize() {
         Map<String, String> map = new HashMap<>();
         map.put("id", id);
@@ -106,6 +119,9 @@ public class AAuthPendingRequest {
         if (expiresIn > 0) map.put("expires_in", String.valueOf(expiresIn));
         if (error != null) map.put("error", error);
         if (errorDescription != null) map.put("error_description", errorDescription);
+        if (clarificationEnabled) map.put("clarification_enabled", "true");
+        if (clarification != null) map.put("clarification", clarification);
+        if (clarificationResponse != null) map.put("clarification_response", clarificationResponse);
         return map;
     }
 
@@ -128,6 +144,9 @@ public class AAuthPendingRequest {
         req.expiresIn = parseLong(map.get("expires_in"), 0);
         req.error = map.get("error");
         req.errorDescription = map.get("error_description");
+        req.clarificationEnabled = "true".equals(map.get("clarification_enabled"));
+        req.clarification = map.get("clarification");
+        req.clarificationResponse = map.get("clarification_response");
         return req;
     }
 

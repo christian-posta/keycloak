@@ -176,6 +176,10 @@ public class AuthGrantType implements OAuth2GrantType {
             String purpose = context.getFormParams().getFirst("purpose");
             String callbackUrl = redirectUri; // treat redirect_uri as callback hint
 
+            // Determine if clarification mode should be enabled for this request
+            AAuthConfig config = AAuthConfig.forRealm(realm);
+            boolean clarificationEnabled = config.requiresClarification(grantedScope);
+
             // Store agent public key JWK keyed by JKT so the interaction endpoint
             // can retrieve it when building the auth token during consent
             storeAgentPublicKey(session, agentPublicKey, agentJkt);
@@ -183,7 +187,7 @@ public class AuthGrantType implements OAuth2GrantType {
             AAuthPendingRequestStore pendingStore = new AAuthPendingRequestStore(session);
             AAuthPendingRequest pending = pendingStore.createPendingRequest(
                     agentId, agentJkt, signatureScheme, resourceId, grantedScope,
-                    purpose, AAuthPendingRequest.REQUIRE_INTERACTION, callbackUrl);
+                    purpose, AAuthPendingRequest.REQUIRE_INTERACTION, callbackUrl, clarificationEnabled);
 
             String pendingPath = buildPendingPath(session, pending.getId());
 
@@ -280,6 +284,10 @@ public class AuthGrantType implements OAuth2GrantType {
                 if (config.isConsentRequiredForScope(s)) {
                     return true;
                 }
+            }
+            // Clarification scopes always imply consent is required
+            if (config.requiresClarification(scope)) {
+                return true;
             }
         }
         // Future: Check resource-specific policies, user context requirements, etc.

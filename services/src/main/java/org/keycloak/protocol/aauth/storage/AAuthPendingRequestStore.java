@@ -62,6 +62,16 @@ public class AAuthPendingRequestStore {
     public AAuthPendingRequest createPendingRequest(String agentId, String agentJkt,
             String signatureScheme, String resourceId, String scope, String purpose,
             String requireType, String callbackUrl) {
+        return createPendingRequest(agentId, agentJkt, signatureScheme, resourceId, scope, purpose,
+                requireType, callbackUrl, false);
+    }
+
+    /**
+     * Create a new pending request with optional clarification mode enabled.
+     */
+    public AAuthPendingRequest createPendingRequest(String agentId, String agentJkt,
+            String signatureScheme, String resourceId, String scope, String purpose,
+            String requireType, String callbackUrl, boolean clarificationEnabled) {
 
         String id = UUID.randomUUID().toString();
         int now = Time.currentTime();
@@ -72,6 +82,7 @@ public class AAuthPendingRequestStore {
         AAuthPendingRequest pending = new AAuthPendingRequest(
                 id, expiresAt, agentId, agentJkt, signatureScheme, resourceId, scope,
                 purpose, requireType, interactionCode, callbackUrl, now);
+        pending.setClarificationEnabled(clarificationEnabled);
 
         SingleUseObjectProvider store = session.singleUseObjects();
         store.put(PENDING_PREFIX + id, DEFAULT_LIFESPAN, pending.serialize());
@@ -155,6 +166,30 @@ public class AAuthPendingRequestStore {
         req.setErrorDescription(errorDescription);
         updatePendingRequest(req);
         logger.debugf("Denied pending request id=%s, error=%s", id, error);
+    }
+
+    /**
+     * Store a clarification question from the user, changing status to awaiting_clarification.
+     */
+    public void setClarificationQuestion(String id, String question) {
+        AAuthPendingRequest req = getPendingRequest(id);
+        if (req == null) return;
+        req.setClarification(question);
+        req.setStatus(AAuthPendingRequest.STATUS_AWAITING_CLARIFICATION);
+        updatePendingRequest(req);
+        logger.debugf("Set clarification question for pending request id=%s", id);
+    }
+
+    /**
+     * Store an agent's clarification response, changing status back to pending.
+     */
+    public void setClarificationResponse(String id, String response) {
+        AAuthPendingRequest req = getPendingRequest(id);
+        if (req == null) return;
+        req.setClarificationResponse(response);
+        req.setStatus(AAuthPendingRequest.STATUS_PENDING);
+        updatePendingRequest(req);
+        logger.debugf("Set clarification response for pending request id=%s", id);
     }
 
     /**

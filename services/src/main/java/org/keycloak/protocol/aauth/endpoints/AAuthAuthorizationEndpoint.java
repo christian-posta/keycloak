@@ -232,6 +232,74 @@ public class AAuthAuthorizationEndpoint {
         return redirectToCallback(callbackUrl, state);
     }
 
+    /**
+     * User submits a clarification question to forward to the agent.
+     * Form params: pending_request_id, interaction_code, clarification_question, callback_url, state
+     */
+    @Path("clarify")
+    @POST
+    @Consumes(jakarta.ws.rs.core.MediaType.APPLICATION_FORM_URLENCODED)
+    public Response processClarify() {
+        checkSsl();
+        checkRealm();
+
+        MultivaluedMap<String, String> formData = session.getContext()
+                .getHttpRequest().getDecodedFormParameters();
+
+        String pendingRequestId = formData.getFirst("pending_request_id");
+        String interactionCode = formData.getFirst("interaction_code");
+        String question = formData.getFirst("clarification_question");
+        String callbackUrl = formData.getFirst("callback_url");
+        String state = formData.getFirst("state");
+
+        if (pendingRequestId == null || pendingRequestId.isEmpty()) {
+            return showErrorPage("Missing required parameter: pending_request_id");
+        }
+        if (question == null || question.trim().isEmpty()) {
+            return showErrorPage("Clarification question cannot be empty");
+        }
+
+        // Verify user is authenticated
+        AuthenticationManager.AuthResult authResult =
+                AuthenticationManager.authenticateIdentityCookie(session, realm, true);
+        if (authResult == null || authResult.getSession() == null) {
+            return showErrorPage("User session not found. Please log in again.");
+        }
+
+        AAuthPendingRequestStore pendingStore = new AAuthPendingRequestStore(session);
+        AAuthPendingRequest pending = pendingStore.getPendingRequest(pendingRequestId);
+        if (pending == null) {
+            return showErrorPage("Pending request not found or expired");
+        }
+        if (!pending.isClarificationEnabled()) {
+            return showErrorPage("Clarification is not enabled for this request");
+        }
+
+        pendingStore.setClarificationQuestion(pendingRequestId, question.trim());
+
+        logger.infof("AAuth clarify: stored question for pending=%s, agent=%s", pendingRequestId, pending.getAgentId());
+
+        // Redirect back to interact page to show "waiting" state
+        try {
+            UriBuilder uriBuilder = UriBuilder.fromUri(
+                    session.getContext().getUri().getBaseUri())
+                    .path("realms").path(realm.getName()).path("protocol/aauth/interact");
+            if (interactionCode != null && !interactionCode.isEmpty()) {
+                uriBuilder.queryParam("code", interactionCode);
+            }
+            if (callbackUrl != null && !callbackUrl.isEmpty()) {
+                uriBuilder.queryParam("callback", callbackUrl);
+            }
+            if (state != null && !state.isEmpty()) {
+                uriBuilder.queryParam("state", state);
+            }
+            return Response.seeOther(uriBuilder.build()).build();
+        } catch (Exception e) {
+            logger.warnf(e, "Failed to build redirect URI after clarify");
+            return showErrorPage("Failed to redirect after clarification submission");
+        }
+    }
+
     private Response processInteraction(MultivaluedMap<String, String> params) {
         event.event(EventType.LOGIN);
 
@@ -308,8 +376,10 @@ public class AAuthAuthorizationEndpoint {
         UserModel user = authResult.getUser();
 
         // Skip consent screen if user already consented this session (unless prompt=consent)
+        // Never skip for clarification-enabled requests — they always require deliberate interaction
         String prompt = params.getFirst(PROMPT_PARAM);
-        if (!TokenUtil.hasPrompt(prompt, PROMPT_CONSENT)
+        if (!pending.isClarificationEnabled()
+                && !TokenUtil.hasPrompt(prompt, PROMPT_CONSENT)
                 && hasSessionConsent(userSession, pending.getAgentId(), pending.getResourceId(), pending.getScope())) {
             event.detail(Details.CONSENT, Details.CONSENT_VALUE_PERSISTED_CONSENT);
             return completeConsentAndRedirect(pending, userSession, user, callbackUrl, state, pendingStore);
@@ -461,15 +531,39 @@ public class AAuthAuthorizationEndpoint {
                     && Boolean.TRUE.equals(realm.getAttribute("darkMode", true)));
             attributes.put("pageId", "aauth-grant");
 
-            String consentActionUrl = session.getContext().getUri().getBaseUri()
-                    + "realms/" + realm.getName() + "/protocol/aauth/interact/consent";
+            String baseUri = session.getContext().getUri().getBaseUri().toString();
+            String consentActionUrl = baseUri + "realms/" + realm.getName() + "/protocol/aauth/interact/consent";
+            String clarifyActionUrl = baseUri + "realms/" + realm.getName() + "/protocol/aauth/interact/clarify";
             List<String> scopes = pending.getScope() != null && !pending.getScope().trim().isEmpty()
                     ? Arrays.asList(pending.getScope().split("\\s+"))
                     : Collections.emptyList();
 
-            attributes.put("aauth", new AAuthConsentBean(
+            AAuthConsentBean consentBean = new AAuthConsentBean(
                     consentCode, pending.getAgentId(), pending.getResourceId(),
-                    scopes, consentActionUrl));
+                    scopes, consentActionUrl);
+            consentBean.setClarificationEnabled(pending.isClarificationEnabled());
+            consentBean.setClarification(pending.getClarification());
+            consentBean.setClarificationResponse(pending.getClarificationResponse());
+            consentBean.setPendingRequestId(pending.getId());
+            consentBean.setInteractionCode(pending.getInteractionCode());
+            consentBean.setCallbackUrl(callbackUrl != null ? callbackUrl : "");
+            consentBean.setState(state != null ? state : "");
+            consentBean.setClarifyActionUrl(clarifyActionUrl);
+
+            // Build a refresh URL so the "waiting" state can reload the consent screen
+            UriBuilder refreshUriBuilder = UriBuilder.fromUri(session.getContext().getUri().getBaseUri())
+                    .path("realms").path(realm.getName()).path("protocol/aauth/interact");
+            if (pending.getInteractionCode() != null) {
+                refreshUriBuilder.queryParam("code", pending.getInteractionCode());
+            }
+            if (callbackUrl != null && !callbackUrl.isEmpty()) {
+                refreshUriBuilder.queryParam("callback", callbackUrl);
+            }
+            if (state != null && !state.isEmpty()) {
+                refreshUriBuilder.queryParam("state", state);
+            }
+            consentBean.setRefreshUrl(refreshUriBuilder.build().toString());
+            attributes.put("aauth", consentBean);
 
             logger.infof("AAuth interaction: rendering consent screen for theme=%s", theme.getName());
             String content = freeMarker.processTemplate(attributes, "login-aauth-grant.ftl", theme);
